@@ -1,0 +1,24 @@
+{
+  "name": "lobotinify",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Extension de Chrome para galeria de imagenes web y biblioteca manual.",
+  "main": "src/popup.js",
+  "scripts": {
+    "sync:version": "node scripts/sync-version.mjs",
+    "version": "npm run sync:version",
+    "build:prepare": "npm run sync:version && rm -rf dist && mkdir -p dist && cp src/manifest.json src/popup.html src/popup.css dist/ && cp -R src/assets dist/assets && cp -R src/_locales dist/_locales",
+    "build:js": "esbuild src/popup.js --bundle --minify --legal-comments=none --format=esm --platform=browser --target=chrome120 --outfile=dist/popup.js",
+    "build": "npm run build:prepare && npm run build:js",
+    "build:watch": "npm run build:prepare && esbuild src/popup.js --bundle --minify --legal-comments=none --format=esm --platform=browser --target=chrome120 --outfile=dist/popup.js --watch",
+    "publish:zip": "mkdir -p release && rm -f \"release/loboTinify-v$npm_package_version.zip\" && cd dist && zip -r \"../release/loboTinify-v$npm_package_version.zip\" . -x \"*.DS_Store\" -x \"loboTinify-v*.zip\"",
+    "publish": "npm run build && npm run publish:zip"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "esbuild": "^0.27.3"
+  }
+}
