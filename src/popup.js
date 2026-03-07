@@ -27,7 +27,18 @@ const elements = {
   pageLibraryBtn: document.getElementById('pageLibraryBtn'),
   pageUserBtn: document.getElementById('pageUserBtn'),
   pageAboutBtn: document.getElementById('pageAboutBtn'),
+  saveGalleryFabGroup: document.getElementById('saveGalleryFabGroup'),
   saveGalleryFabBtn: document.getElementById('saveGalleryFabBtn'),
+  saveGalleryAsFabBtn: document.getElementById('saveGalleryAsFabBtn'),
+  saveAsModal: document.getElementById('saveAsModal'),
+  saveAsNameInput: document.getElementById('saveAsNameInput'),
+  saveAsCancelBtn: document.getElementById('saveAsCancelBtn'),
+  saveAsConfirmBtn: document.getElementById('saveAsConfirmBtn'),
+  manualUploadModal: document.getElementById('manualUploadModal'),
+  manualUploadGallerySelect: document.getElementById('manualUploadGallerySelect'),
+  manualUploadNameInput: document.getElementById('manualUploadNameInput'),
+  manualUploadCancelBtn: document.getElementById('manualUploadCancelBtn'),
+  manualUploadConfirmBtn: document.getElementById('manualUploadConfirmBtn'),
   aboutVersion: document.getElementById('aboutVersion'),
   aboutSignatureTitle: document.getElementById('aboutSignatureTitle'),
   feedbackToast: document.getElementById('feedbackToast'),
@@ -49,6 +60,8 @@ const state = {
   galleryListMode: 'list',
   activeGalleryId: '',
   thumbnailColumns: 4,
+  pendingManualUploadFiles: [],
+  pendingManualUploadTarget: null,
   toastTimer: null,
   fileDragDepth: 0,
   fileDragActive: false
@@ -98,6 +111,91 @@ function bindEvents() {
     });
   }
 
+  if (elements.saveGalleryAsFabBtn instanceof HTMLButtonElement) {
+    elements.saveGalleryAsFabBtn.addEventListener('click', () => {
+      openSaveAsModal();
+    });
+  }
+
+  if (elements.saveAsCancelBtn instanceof HTMLButtonElement) {
+    elements.saveAsCancelBtn.addEventListener('click', () => {
+      closeSaveAsModal();
+    });
+  }
+
+  if (elements.saveAsConfirmBtn instanceof HTMLButtonElement) {
+    elements.saveAsConfirmBtn.addEventListener('click', () => {
+      void confirmSaveAsModal();
+    });
+  }
+
+  if (elements.saveAsNameInput instanceof HTMLInputElement) {
+    elements.saveAsNameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeSaveAsModal();
+        return;
+      }
+      if (event.key !== 'Enter') {
+        return;
+      }
+      event.preventDefault();
+      void confirmSaveAsModal();
+    });
+  }
+
+  if (elements.saveAsModal instanceof HTMLElement) {
+    elements.saveAsModal.addEventListener('click', (event) => {
+      if (event.target === elements.saveAsModal) {
+        closeSaveAsModal();
+      }
+    });
+  }
+
+  if (elements.manualUploadCancelBtn instanceof HTMLButtonElement) {
+    elements.manualUploadCancelBtn.addEventListener('click', () => {
+      closeManualUploadModal();
+    });
+  }
+
+  if (elements.manualUploadConfirmBtn instanceof HTMLButtonElement) {
+    elements.manualUploadConfirmBtn.addEventListener('click', () => {
+      confirmManualUploadModal();
+    });
+  }
+
+  if (elements.manualUploadNameInput instanceof HTMLInputElement) {
+    elements.manualUploadNameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeManualUploadModal();
+        return;
+      }
+      if (event.key !== 'Enter') {
+        return;
+      }
+      event.preventDefault();
+      confirmManualUploadModal();
+    });
+  }
+
+  if (elements.manualUploadGallerySelect instanceof HTMLSelectElement) {
+    elements.manualUploadGallerySelect.addEventListener('change', () => {
+      const selectedId = String(elements.manualUploadGallerySelect.value || '').trim();
+      if (selectedId && elements.manualUploadNameInput instanceof HTMLInputElement) {
+        elements.manualUploadNameInput.value = '';
+      }
+    });
+  }
+
+  if (elements.manualUploadModal instanceof HTMLElement) {
+    elements.manualUploadModal.addEventListener('click', (event) => {
+      if (event.target === elements.manualUploadModal) {
+        closeManualUploadModal();
+      }
+    });
+  }
+
   if (elements.galleryBackBtn instanceof HTMLButtonElement) {
     elements.galleryBackBtn.addEventListener('click', () => {
       state.galleryListMode = 'list';
@@ -122,6 +220,19 @@ function bindEvents() {
   }
 
   elements.logoUploadBtn.addEventListener('click', () => {
+    state.pendingManualUploadFiles = [];
+    state.pendingManualUploadTarget = null;
+    const activeGalleryId =
+      state.galleryView === VIEW_LIBRARY && state.galleryListMode === 'detail'
+        ? String(state.activeGalleryId || '').trim()
+        : '';
+    if (activeGalleryId) {
+      state.pendingManualUploadTarget = {
+        mode: 'existing',
+        galleryId: activeGalleryId
+      };
+    }
+    elements.logoUploadInput.value = '';
     elements.logoUploadInput.click();
   });
 
@@ -133,9 +244,19 @@ function bindEvents() {
     const files = input.files ? Array.from(input.files) : [];
     input.value = '';
     if (files.length === 0) {
+      state.pendingManualUploadFiles = [];
+      state.pendingManualUploadTarget = null;
       return;
     }
-    void addManualImages(files);
+    const directTarget = state.pendingManualUploadTarget;
+    state.pendingManualUploadTarget = null;
+    if (directTarget) {
+      state.pendingManualUploadFiles = [];
+      void addManualImages(files, directTarget);
+      return;
+    }
+    state.pendingManualUploadFiles = files;
+    openManualUploadModal();
   });
 
   elements.logoLibraryGrid.addEventListener('click', (event) => {
@@ -152,6 +273,30 @@ function bindEvents() {
       return;
     }
 
+    const downloadGalleryButton = target.closest('button[data-gallery-download-id]');
+    if (downloadGalleryButton && !downloadGalleryButton.disabled) {
+      event.preventDefault();
+      event.stopPropagation();
+      const galleryId = String(downloadGalleryButton.dataset.galleryDownloadId || '').trim();
+      if (!galleryId) {
+        return;
+      }
+      void downloadGalleryAsZip(galleryId);
+      return;
+    }
+
+    const deleteGalleryButton = target.closest('button[data-gallery-delete-id]');
+    if (deleteGalleryButton && !deleteGalleryButton.disabled) {
+      event.preventDefault();
+      event.stopPropagation();
+      const galleryId = String(deleteGalleryButton.dataset.galleryDeleteId || '').trim();
+      if (!galleryId) {
+        return;
+      }
+      void removeGalleryById(galleryId);
+      return;
+    }
+
     const openGalleryButton = target.closest('button[data-gallery-open-id]');
     if (openGalleryButton && !openGalleryButton.disabled) {
       const galleryId = String(openGalleryButton.dataset.galleryOpenId || '').trim();
@@ -161,6 +306,21 @@ function bindEvents() {
       state.galleryListMode = 'detail';
       state.activeGalleryId = galleryId;
       renderActiveLogoLibraryGrid();
+      return;
+    }
+
+    const deleteGalleryItemButton = target.closest('button[data-gallery-item-delete-id]');
+    if (deleteGalleryItemButton && !deleteGalleryItemButton.disabled) {
+      event.preventDefault();
+      event.stopPropagation();
+      const imageId = String(deleteGalleryItemButton.dataset.galleryItemDeleteId || '').trim();
+      const galleryId = String(
+        deleteGalleryItemButton.dataset.galleryItemGalleryId || state.activeGalleryId || ''
+      ).trim();
+      if (!imageId || !galleryId) {
+        return;
+      }
+      void removeStoredGalleryImageById(galleryId, imageId);
       return;
     }
 
@@ -276,6 +436,10 @@ function bindEvents() {
 function setActivePage(page) {
   const safe = page === 'user' || page === 'about' || page === 'library' ? page : 'url';
   state.activePage = safe;
+  if (safe !== 'url') {
+    closeSaveAsModal();
+    closeManualUploadModal();
+  }
 
   const isGallery = safe === 'url' || safe === 'library';
   elements.popupRoot.classList.toggle('gallery-tab-active', isGallery);
@@ -338,7 +502,7 @@ function updateGalleryHeader() {
       const gallery = state.savedGalleries.find(
         (entry) => String(entry?.id || '').trim() === String(state.activeGalleryId || '').trim()
       );
-      elements.logoLibraryTitleText.textContent = String(gallery?.domain || 'Galeria');
+      elements.logoLibraryTitleText.textContent = getGalleryDisplayName(gallery);
     }
   } else {
     elements.logoLibraryTitleText.textContent = 'Galeries';
@@ -347,12 +511,180 @@ function updateGalleryHeader() {
 }
 
 function updateSaveGalleryFabVisibility() {
-  if (!(elements.saveGalleryFabBtn instanceof HTMLButtonElement)) {
+  if (
+    !(elements.saveGalleryFabBtn instanceof HTMLButtonElement) ||
+    !(elements.saveGalleryAsFabBtn instanceof HTMLButtonElement) ||
+    !(elements.saveGalleryFabGroup instanceof HTMLElement)
+  ) {
     return;
   }
   const visible = state.activePage === 'url' && state.galleryView === VIEW_WEB;
-  elements.saveGalleryFabBtn.classList.toggle('hidden', !visible);
-  elements.saveGalleryFabBtn.disabled = !visible || state.webLoading || state.webItems.length === 0;
+  const enabled = visible && !state.webLoading && state.webItems.length > 0;
+  elements.saveGalleryFabGroup.classList.toggle('hidden', !visible);
+  elements.saveGalleryFabBtn.disabled = !enabled;
+  elements.saveGalleryAsFabBtn.disabled = !enabled;
+  if (!visible) {
+    closeSaveAsModal();
+  }
+}
+
+function openSaveAsModal() {
+  if (!(elements.saveAsModal instanceof HTMLElement) || !(elements.saveAsNameInput instanceof HTMLInputElement)) {
+    return;
+  }
+  const canOpen = state.activePage === 'url' && state.galleryView === VIEW_WEB && !state.webLoading && state.webItems.length > 0;
+  if (!canOpen) {
+    return;
+  }
+  closeManualUploadModal();
+  let defaultName = String(state.activeTabUrl || '').trim();
+  if (!defaultName) {
+    try {
+      const parsed = new URL(String(state.activeTabUrl || '').trim());
+      defaultName = String(parsed.href || '').trim();
+    } catch {
+      defaultName = '';
+    }
+  }
+  elements.saveAsNameInput.value = defaultName;
+  elements.saveAsModal.classList.remove('hidden');
+  elements.saveAsModal.setAttribute('aria-hidden', 'false');
+  window.requestAnimationFrame(() => {
+    elements.saveAsNameInput.focus();
+    elements.saveAsNameInput.select();
+  });
+}
+
+function closeSaveAsModal() {
+  if (!(elements.saveAsModal instanceof HTMLElement)) {
+    return;
+  }
+  elements.saveAsModal.classList.add('hidden');
+  elements.saveAsModal.setAttribute('aria-hidden', 'true');
+}
+
+async function confirmSaveAsModal() {
+  if (!(elements.saveAsNameInput instanceof HTMLInputElement)) {
+    return;
+  }
+  const name = String(elements.saveAsNameInput.value || '').trim();
+  if (!name) {
+    showFeedbackToast('Escriu un nom per guardar', 'error');
+    elements.saveAsNameInput.focus();
+    return;
+  }
+  closeSaveAsModal();
+  await saveSelectedWebImagesToDomainGallery({ customName: name });
+}
+
+function openManualUploadModal() {
+  if (
+    !(elements.manualUploadModal instanceof HTMLElement) ||
+    !(elements.manualUploadGallerySelect instanceof HTMLSelectElement) ||
+    !(elements.manualUploadNameInput instanceof HTMLInputElement)
+  ) {
+    return;
+  }
+  const pendingCount = Array.isArray(state.pendingManualUploadFiles) ? state.pendingManualUploadFiles.length : 0;
+  const canOpen =
+    state.galleryView === VIEW_LIBRARY &&
+    (state.activePage === 'library' || state.activePage === 'url') &&
+    pendingCount > 0;
+  if (!canOpen) {
+    return;
+  }
+
+  closeSaveAsModal();
+  populateManualUploadGallerySelect();
+  elements.manualUploadGallerySelect.value = '';
+  elements.manualUploadNameInput.value = '';
+  elements.manualUploadModal.classList.remove('hidden');
+  elements.manualUploadModal.setAttribute('aria-hidden', 'false');
+  window.requestAnimationFrame(() => {
+    elements.manualUploadGallerySelect.focus();
+  });
+}
+
+function closeManualUploadModal(options = {}) {
+  if (!(elements.manualUploadModal instanceof HTMLElement)) {
+    return;
+  }
+  const clearPending = options.clearPending !== false;
+  elements.manualUploadModal.classList.add('hidden');
+  elements.manualUploadModal.setAttribute('aria-hidden', 'true');
+  if (clearPending) {
+    state.pendingManualUploadFiles = [];
+    state.pendingManualUploadTarget = null;
+  }
+}
+
+function confirmManualUploadModal() {
+  const target = buildManualUploadTargetFromModal();
+  if (!target) {
+    return;
+  }
+  const files = Array.isArray(state.pendingManualUploadFiles) ? state.pendingManualUploadFiles : [];
+  if (files.length === 0) {
+    closeManualUploadModal();
+    showFeedbackToast('Selecciona imatges primer', 'error');
+    return;
+  }
+  closeManualUploadModal({ clearPending: false });
+  state.pendingManualUploadFiles = [];
+  void addManualImages(files, target);
+}
+
+function populateManualUploadGallerySelect() {
+  if (!(elements.manualUploadGallerySelect instanceof HTMLSelectElement)) {
+    return;
+  }
+
+  const select = elements.manualUploadGallerySelect;
+  select.replaceChildren();
+  const createOption = document.createElement('option');
+  createOption.value = '';
+  createOption.textContent = 'Crear nova galeria';
+  select.appendChild(createOption);
+
+  const collections = getGalleryCollections();
+  for (const collection of collections) {
+    const galleryId = String(collection?.id || '').trim();
+    if (!galleryId) {
+      continue;
+    }
+    const option = document.createElement('option');
+    option.value = galleryId;
+    option.textContent = String(collection.title || 'Galeria');
+    select.appendChild(option);
+  }
+}
+
+function buildManualUploadTargetFromModal() {
+  if (
+    !(elements.manualUploadGallerySelect instanceof HTMLSelectElement) ||
+    !(elements.manualUploadNameInput instanceof HTMLInputElement)
+  ) {
+    return null;
+  }
+
+  const selectedId = String(elements.manualUploadGallerySelect.value || '').trim();
+  if (selectedId) {
+    return {
+      mode: 'existing',
+      galleryId: selectedId
+    };
+  }
+
+  const customName = String(elements.manualUploadNameInput.value || '').trim();
+  if (!customName) {
+    showFeedbackToast('Escriu un nom o selecciona una galeria', 'error');
+    elements.manualUploadNameInput.focus();
+    return null;
+  }
+  return {
+    mode: 'new',
+    name: customName
+  };
 }
 
 function updateUploadButtonVisibility() {
@@ -364,6 +696,9 @@ function updateUploadButtonVisibility() {
     (state.activePage === 'library' || state.activePage === 'url');
   elements.logoUploadBtn.classList.toggle('hidden', !visible);
   elements.logoUploadBtn.disabled = !visible;
+  if (!visible) {
+    closeManualUploadModal();
+  }
 }
 
 function areAllWebImagesSelected() {
@@ -531,11 +866,16 @@ function getGalleryCollections() {
 
   if (state.manualItems.length > 0) {
     const latestManual = Math.max(...state.manualItems.map((item) => Number(item.createdAt) || 0), 0);
+    const manualSizeBytes = state.manualItems.reduce(
+      (sum, item) => sum + getStoredItemSizeBytes(item),
+      0
+    );
     collections.push({
       id: MANUAL_GALLERY_ID,
       title: 'Manual',
       subtitle: 'Pujades manuals',
       count: state.manualItems.length,
+      sizeBytes: manualSizeBytes,
       updatedAt: latestManual,
       type: 'manual'
     });
@@ -546,11 +886,15 @@ function getGalleryCollections() {
     if (!domain) {
       continue;
     }
+    const items = Array.isArray(gallery.items) ? gallery.items : [];
+    const gallerySizeBytes = items.reduce((sum, item) => sum + getStoredItemSizeBytes(item), 0);
     collections.push({
       id: String(gallery.id || '').trim(),
-      title: domain,
+      title: getGalleryDisplayName(gallery),
       subtitle: 'Web guardada',
-      count: Array.isArray(gallery.items) ? gallery.items.length : 0,
+      count: items.length,
+      sizeBytes: gallerySizeBytes,
+      faviconUrl: resolveGalleryFaviconUrl(gallery),
       updatedAt: Number(gallery.updatedAt) || 0,
       type: 'domain'
     });
@@ -618,19 +962,43 @@ function renderGalleryDetailGrid() {
   }
 
   for (const item of gallery.items) {
-    grid.appendChild(createStoredGalleryCard(item));
+    grid.appendChild(createStoredGalleryCard(item, gallery.id));
   }
 }
 
 function createGalleryListCard(entry) {
+  const cardWrap = document.createElement('div');
+  cardWrap.className = 'saved-gallery-entry-wrap';
+
   const card = document.createElement('button');
   card.type = 'button';
   card.className = 'saved-gallery-entry';
   card.dataset.galleryOpenId = String(entry.id || '').trim();
 
+  const titleRow = document.createElement('span');
+  titleRow.className = 'saved-gallery-entry-title-row';
+
   const title = document.createElement('span');
   title.className = 'saved-gallery-entry-title';
   title.textContent = String(entry.title || 'Galeria');
+  titleRow.appendChild(title);
+
+  if (entry.type === 'domain') {
+    const faviconUrl = String(entry.faviconUrl || '').trim();
+    if (faviconUrl) {
+      const favicon = document.createElement('img');
+      favicon.className = 'saved-gallery-entry-favicon';
+      favicon.src = faviconUrl;
+      favicon.alt = '';
+      favicon.loading = 'lazy';
+      favicon.decoding = 'async';
+      favicon.setAttribute('aria-hidden', 'true');
+      favicon.addEventListener('error', () => {
+        favicon.remove();
+      });
+      titleRow.prepend(favicon);
+    }
+  }
 
   const subtitle = document.createElement('span');
   subtitle.className = 'saved-gallery-entry-subtitle';
@@ -640,13 +1008,502 @@ function createGalleryListCard(entry) {
   count.className = 'saved-gallery-entry-count';
   count.textContent = `${Number(entry.count) || 0} imatges`;
 
-  card.appendChild(title);
+  const size = document.createElement('span');
+  size.className = 'saved-gallery-entry-size';
+  size.textContent = formatGallerySizeMb(entry.sizeBytes);
+
+  card.appendChild(titleRow);
   card.appendChild(subtitle);
   card.appendChild(count);
-  return card;
+  card.appendChild(size);
+
+  const actions = document.createElement('div');
+  actions.className = 'saved-gallery-entry-actions';
+
+  const downloadButton = document.createElement('button');
+  downloadButton.type = 'button';
+  downloadButton.className = 'saved-gallery-entry-download';
+  downloadButton.dataset.galleryDownloadId = String(entry.id || '').trim();
+  downloadButton.setAttribute('aria-label', `Descarregar galeria ${entry.title}`);
+  downloadButton.title = 'Descarregar galeria (ZIP)';
+  downloadButton.innerHTML = '<i class="bi bi-download" aria-hidden="true"></i>';
+  downloadButton.disabled = Number(entry.count) <= 0;
+
+  const deleteButton = document.createElement('button');
+  deleteButton.type = 'button';
+  deleteButton.className = 'saved-gallery-entry-delete';
+  deleteButton.dataset.galleryDeleteId = String(entry.id || '').trim();
+  deleteButton.setAttribute('aria-label', `Eliminar galeria ${entry.title}`);
+  deleteButton.title = 'Eliminar galeria';
+  deleteButton.innerHTML = '<i class="bi bi-trash3" aria-hidden="true"></i>';
+
+  actions.appendChild(downloadButton);
+  actions.appendChild(deleteButton);
+  cardWrap.appendChild(card);
+  cardWrap.appendChild(actions);
+  return cardWrap;
 }
 
-function createStoredGalleryCard(item) {
+async function downloadGalleryAsZip(galleryId) {
+  const safeGalleryId = String(galleryId || '').trim();
+  if (!safeGalleryId) {
+    return;
+  }
+
+  const gallerySnapshot = getGallerySnapshotById(safeGalleryId);
+  if (!gallerySnapshot || gallerySnapshot.items.length === 0) {
+    showFeedbackToast('Aquesta galeria no te imatges', 'error');
+    return;
+  }
+
+  try {
+    const usedNames = new Set();
+    const zipEntries = [];
+
+    for (let index = 0; index < gallerySnapshot.items.length; index += 1) {
+      const item = gallerySnapshot.items[index];
+      const dataUrl = String(item?.dataUrl || '').trim();
+      const bytes = decodeDataUrlToBytes(dataUrl);
+      if (!bytes || bytes.length === 0) {
+        continue;
+      }
+      const preferredName = buildZipEntryName(item, index);
+      const uniqueName = ensureUniqueArchiveName(preferredName, usedNames);
+      zipEntries.push({ name: uniqueName, bytes });
+    }
+
+    if (zipEntries.length === 0) {
+      showFeedbackToast('No hi ha imatges valides per descarregar', 'error');
+      return;
+    }
+
+    const archiveName = buildGalleryArchiveFileName(gallerySnapshot);
+    const blob = createZipBlob(zipEntries);
+    const objectUrl = URL.createObjectURL(blob);
+
+    try {
+      if (chrome?.downloads?.download) {
+        await chrome.downloads.download({
+          url: objectUrl,
+          filename: archiveName,
+          saveAs: true
+        });
+      } else {
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.download = archiveName;
+        anchor.click();
+      }
+      showFeedbackToast(`ZIP descarregat (${zipEntries.length} imatges)`);
+    } finally {
+      window.setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+      }, 60_000);
+    }
+  } catch (error) {
+    console.error('Gallery zip download failed', error);
+    showFeedbackToast('No s\'ha pogut descarregar la galeria', 'error');
+  }
+}
+
+function getGallerySnapshotById(galleryId) {
+  const safeGalleryId = String(galleryId || '').trim();
+  if (!safeGalleryId) {
+    return null;
+  }
+
+  if (safeGalleryId === MANUAL_GALLERY_ID) {
+    return {
+      id: MANUAL_GALLERY_ID,
+      name: 'manual',
+      items: Array.isArray(state.manualItems) ? state.manualItems : []
+    };
+  }
+
+  const gallery = state.savedGalleries.find((entry) => String(entry?.id || '').trim() === safeGalleryId);
+  if (!gallery) {
+    return null;
+  }
+  return {
+    id: safeGalleryId,
+    name: getGalleryDisplayName(gallery),
+    items: Array.isArray(gallery.items) ? gallery.items : []
+  };
+}
+
+function decodeDataUrlToBytes(dataUrl) {
+  const safeDataUrl = String(dataUrl || '').trim();
+  if (!safeDataUrl.startsWith('data:image/')) {
+    return null;
+  }
+  const commaIndex = safeDataUrl.indexOf(',');
+  if (commaIndex < 0) {
+    return null;
+  }
+
+  const metadata = safeDataUrl.slice(5, commaIndex);
+  const payload = safeDataUrl.slice(commaIndex + 1);
+  const isBase64 = metadata.toLowerCase().includes(';base64');
+
+  if (isBase64) {
+    const base64 = payload.replace(/\s+/g, '');
+    if (!base64) {
+      return null;
+    }
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  }
+
+  try {
+    const decoded = decodeURIComponent(payload);
+    return new TextEncoder().encode(decoded);
+  } catch {
+    return null;
+  }
+}
+
+function buildGalleryArchiveFileName(gallerySnapshot) {
+  const fallback = `galeria-${Date.now()}.zip`;
+  const name = sanitizeArchiveName(gallerySnapshot?.name || '');
+  if (!name) {
+    return fallback;
+  }
+  return `${name}.zip`;
+}
+
+function buildZipEntryName(item, index = 0) {
+  const sourceName = extractFileNameFromItemSource(item);
+  const fromItemName = String(item?.name || '').trim();
+  let name = sanitizeArchiveName(sourceName || fromItemName || `imagen-${index + 1}`);
+  if (!name) {
+    name = `imagen-${index + 1}`;
+  }
+
+  if (!/\.[a-z0-9]{2,8}$/iu.test(name)) {
+    const ext = extractImageExtensionFromDataUrl(item?.dataUrl);
+    if (ext) {
+      name = `${name}.${ext}`;
+    }
+  }
+  return name;
+}
+
+function extractFileNameFromItemSource(item) {
+  const candidates = [String(item?.sourcePath || '').trim(), String(item?.sourceUrl || '').trim()];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    try {
+      const parsed = candidate.startsWith('http://') || candidate.startsWith('https://')
+        ? new URL(candidate)
+        : new URL(candidate, 'https://placeholder.local');
+      const segments = String(parsed.pathname || '')
+        .split('/')
+        .filter(Boolean);
+      if (segments.length === 0) {
+        continue;
+      }
+      const rawName = decodeURIComponent(segments[segments.length - 1]);
+      if (rawName) {
+        return rawName;
+      }
+    } catch {
+      // ignore malformed source
+    }
+  }
+  return '';
+}
+
+function extractImageExtensionFromDataUrl(dataUrl) {
+  const safe = String(dataUrl || '').trim();
+  const match = safe.match(/^data:image\/([a-z0-9.+-]+)(?:;|,)/iu);
+  if (!match) {
+    return '';
+  }
+  const mimeSubtype = String(match[1] || '').toLowerCase();
+  if (!mimeSubtype) {
+    return '';
+  }
+  if (mimeSubtype === 'jpeg') {
+    return 'jpg';
+  }
+  if (mimeSubtype === 'svg+xml') {
+    return 'svg';
+  }
+  if (mimeSubtype === 'x-icon' || mimeSubtype === 'vnd.microsoft.icon') {
+    return 'ico';
+  }
+  const normalized = mimeSubtype.split('+')[0];
+  return normalized || '';
+}
+
+function sanitizeArchiveName(value) {
+  const safe = String(value || '')
+    .trim()
+    .replace(/[\\/:*?"<>|]/gu, '-')
+    .replace(/\s+/gu, ' ');
+  if (!safe) {
+    return '';
+  }
+  return safe.length > 140 ? safe.slice(0, 140) : safe;
+}
+
+function ensureUniqueArchiveName(name, usedNames) {
+  const safeName = String(name || '').trim() || 'imatge';
+  if (!usedNames.has(safeName)) {
+    usedNames.add(safeName);
+    return safeName;
+  }
+
+  const dotIndex = safeName.lastIndexOf('.');
+  const hasExt = dotIndex > 0 && dotIndex < safeName.length - 1;
+  const base = hasExt ? safeName.slice(0, dotIndex) : safeName;
+  const ext = hasExt ? safeName.slice(dotIndex) : '';
+
+  let suffix = 2;
+  while (suffix < 10_000) {
+    const candidate = `${base}-${suffix}${ext}`;
+    if (!usedNames.has(candidate)) {
+      usedNames.add(candidate);
+      return candidate;
+    }
+    suffix += 1;
+  }
+
+  const fallback = `${base}-${Date.now()}${ext}`;
+  usedNames.add(fallback);
+  return fallback;
+}
+
+function createZipBlob(entries) {
+  const safeEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  const localParts = [];
+  const centralParts = [];
+  let localOffset = 0;
+  let centralSize = 0;
+  const now = new Date();
+  const dosTime = getDosTime(now);
+  const dosDate = getDosDate(now);
+
+  for (const entry of safeEntries) {
+    const fileName = String(entry?.name || '').trim();
+    const data = entry?.bytes instanceof Uint8Array ? entry.bytes : null;
+    if (!fileName || !data) {
+      continue;
+    }
+
+    const fileNameBytes = new TextEncoder().encode(fileName);
+    const crc = crc32(data);
+    const localHeader = createZipLocalHeader({
+      fileNameBytes,
+      dosTime,
+      dosDate,
+      crc,
+      size: data.length
+    });
+    localParts.push(localHeader, data);
+
+    const centralHeader = createZipCentralHeader({
+      fileNameBytes,
+      dosTime,
+      dosDate,
+      crc,
+      size: data.length,
+      localOffset
+    });
+    centralParts.push(centralHeader);
+    centralSize += centralHeader.length;
+    localOffset += localHeader.length + data.length;
+  }
+
+  const entryCount = centralParts.length;
+  const centralOffset = localOffset;
+  const endRecord = createZipEndRecord({
+    entryCount,
+    centralSize,
+    centralOffset
+  });
+
+  return new Blob([...localParts, ...centralParts, endRecord], { type: 'application/zip' });
+}
+
+function createZipLocalHeader({ fileNameBytes, dosTime, dosDate, crc, size }) {
+  const header = new Uint8Array(30 + fileNameBytes.length);
+  const view = new DataView(header.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 0x0800, true);
+  view.setUint16(8, 0, true);
+  view.setUint16(10, dosTime, true);
+  view.setUint16(12, dosDate, true);
+  view.setUint32(14, crc, true);
+  view.setUint32(18, size, true);
+  view.setUint32(22, size, true);
+  view.setUint16(26, fileNameBytes.length, true);
+  view.setUint16(28, 0, true);
+  header.set(fileNameBytes, 30);
+  return header;
+}
+
+function createZipCentralHeader({ fileNameBytes, dosTime, dosDate, crc, size, localOffset }) {
+  const header = new Uint8Array(46 + fileNameBytes.length);
+  const view = new DataView(header.buffer);
+  view.setUint32(0, 0x02014b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 20, true);
+  view.setUint16(8, 0x0800, true);
+  view.setUint16(10, 0, true);
+  view.setUint16(12, dosTime, true);
+  view.setUint16(14, dosDate, true);
+  view.setUint32(16, crc, true);
+  view.setUint32(20, size, true);
+  view.setUint32(24, size, true);
+  view.setUint16(28, fileNameBytes.length, true);
+  view.setUint16(30, 0, true);
+  view.setUint16(32, 0, true);
+  view.setUint16(34, 0, true);
+  view.setUint16(36, 0, true);
+  view.setUint32(38, 0, true);
+  view.setUint32(42, localOffset, true);
+  header.set(fileNameBytes, 46);
+  return header;
+}
+
+function createZipEndRecord({ entryCount, centralSize, centralOffset }) {
+  const record = new Uint8Array(22);
+  const view = new DataView(record.buffer);
+  const safeEntryCount = Math.max(0, Math.min(0xffff, Number(entryCount) || 0));
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(4, 0, true);
+  view.setUint16(6, 0, true);
+  view.setUint16(8, safeEntryCount, true);
+  view.setUint16(10, safeEntryCount, true);
+  view.setUint32(12, Math.max(0, Number(centralSize) || 0), true);
+  view.setUint32(16, Math.max(0, Number(centralOffset) || 0), true);
+  view.setUint16(20, 0, true);
+  return record;
+}
+
+function getDosTime(date) {
+  const safeDate = date instanceof Date ? date : new Date();
+  const hours = safeDate.getHours();
+  const minutes = safeDate.getMinutes();
+  const seconds = Math.floor(safeDate.getSeconds() / 2);
+  return (hours << 11) | (minutes << 5) | seconds;
+}
+
+function getDosDate(date) {
+  const safeDate = date instanceof Date ? date : new Date();
+  const year = Math.max(1980, safeDate.getFullYear()) - 1980;
+  const month = safeDate.getMonth() + 1;
+  const day = safeDate.getDate();
+  return (year << 9) | (month << 5) | day;
+}
+
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let c = i;
+    for (let bit = 0; bit < 8; bit += 1) {
+      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (let index = 0; index < bytes.length; index += 1) {
+    const code = (crc ^ bytes[index]) & 0xff;
+    crc = (crc >>> 8) ^ CRC32_TABLE[code];
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function getStoredItemSizeBytes(item) {
+  const rawSize = Math.max(0, Number(item?.fileSize) || 0);
+  if (rawSize > 0) {
+    return rawSize;
+  }
+
+  const dataUrl = String(item?.dataUrl || '').trim();
+  if (!dataUrl.startsWith('data:image/')) {
+    return 0;
+  }
+  const commaIndex = dataUrl.indexOf(',');
+  if (commaIndex < 0) {
+    return 0;
+  }
+  const base64 = dataUrl.slice(commaIndex + 1).replace(/\s+/g, '');
+  if (!base64) {
+    return 0;
+  }
+
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+function formatGallerySizeMb(bytes) {
+  const safeBytes = Math.max(0, Number(bytes) || 0);
+  if (safeBytes <= 0) {
+    return '0 MB';
+  }
+  const megaBytes = safeBytes / (1024 * 1024);
+  if (megaBytes < 0.01) {
+    return '0.01 MB';
+  }
+  return `${megaBytes.toFixed(2)} MB`;
+}
+
+function getGalleryDisplayName(gallery) {
+  const rawName = String(gallery?.name || '').trim();
+  if (rawName) {
+    return rawName;
+  }
+  const domain = String(gallery?.domain || '').trim();
+  if (domain) {
+    return domain;
+  }
+  return 'Galeria';
+}
+
+function resolveGalleryFaviconUrl(gallery) {
+  const stored = String(gallery?.faviconUrl || '').trim();
+  if (stored) {
+    return stored;
+  }
+  return buildGalleryFaviconUrl(gallery?.pageOrigin, gallery?.domain);
+}
+
+function buildGalleryFaviconUrl(pageOrigin, domain) {
+  let pageUrl = '';
+  const safePageOrigin = String(pageOrigin || '').trim();
+  if (safePageOrigin) {
+    try {
+      pageUrl = new URL(safePageOrigin).href;
+    } catch {
+      pageUrl = '';
+    }
+  }
+
+  if (!pageUrl) {
+    const safeDomain = String(domain || '').trim().toLowerCase();
+    if (!safeDomain) {
+      return '';
+    }
+    pageUrl = `https://${safeDomain}`;
+  }
+
+  return chrome.runtime.getURL(`/_favicon/?pageUrl=${encodeURIComponent(pageUrl)}&size=32`);
+}
+
+function createStoredGalleryCard(item, galleryId) {
   const card = document.createElement('div');
   card.className = 'logo-library-item stored-gallery-item';
 
@@ -658,16 +1515,15 @@ function createStoredGalleryCard(item) {
   card.appendChild(thumbWrap);
   card.appendChild(name);
 
-  if (item?.sourceUrl) {
-    const highlightButton = document.createElement('button');
-    highlightButton.type = 'button';
-    highlightButton.className = 'logo-library-item-locate';
-    highlightButton.dataset.highlightSourceUrl = String(item.sourceUrl || '').trim();
-    highlightButton.setAttribute('aria-label', `Marcar en web ${item.name}`);
-    highlightButton.title = 'Marcar en web';
-    highlightButton.innerHTML = '<i class="bi bi-eye" aria-hidden="true"></i>';
-    card.appendChild(highlightButton);
-  }
+  const deleteButton = document.createElement('button');
+  deleteButton.type = 'button';
+  deleteButton.className = 'logo-library-item-delete-small';
+  deleteButton.dataset.galleryItemDeleteId = String(item?.id || '').trim();
+  deleteButton.dataset.galleryItemGalleryId = String(galleryId || '').trim();
+  deleteButton.setAttribute('aria-label', `Eliminar ${item.name}`);
+  deleteButton.title = 'Eliminar imatge';
+  deleteButton.innerHTML = '<i class="bi bi-trash3" aria-hidden="true"></i>';
+  card.appendChild(deleteButton);
 
   return card;
 }
@@ -931,7 +1787,7 @@ async function loadWebGallery() {
   }
 }
 
-async function saveSelectedWebImagesToDomainGallery() {
+async function saveSelectedWebImagesToDomainGallery(options = {}) {
   if (state.galleryView !== VIEW_WEB) {
     return;
   }
@@ -956,7 +1812,12 @@ async function saveSelectedWebImagesToDomainGallery() {
     return;
   }
 
-  const galleryId = `domain:${domain}`;
+  const customNameRaw = String(options.customName || '').trim();
+  const hasCustomName = customNameRaw.length > 0;
+  const galleryName = sanitizeGalleryName(hasCustomName ? customNameRaw : domain, domain);
+  const galleryId = hasCustomName
+    ? buildCustomGalleryId(galleryName)
+    : `domain:${domain}`;
   const now = Date.now();
   const existing = state.savedGalleries.find((entry) => String(entry?.id || '') === galleryId);
   const mergedBySource = new Map();
@@ -1004,8 +1865,10 @@ async function saveSelectedWebImagesToDomainGallery() {
 
   const updatedGallery = {
     id: galleryId,
+    name: galleryName,
     domain,
     pageOrigin,
+    faviconUrl: buildGalleryFaviconUrl(pageOrigin, domain),
     updatedAt: now,
     items: Array.from(mergedBySource.values()).sort((a, b) => Number(b.savedAt) - Number(a.savedAt))
   };
@@ -1017,8 +1880,8 @@ async function saveSelectedWebImagesToDomainGallery() {
   state.galleryView = VIEW_LIBRARY;
   state.galleryListMode = 'detail';
   state.activeGalleryId = galleryId;
-  renderActiveLogoLibraryGrid();
-  showFeedbackToast(`${inserted} imatges desades a ${domain}`);
+  setActivePage('library');
+  showFeedbackToast(`${inserted} imatges desades a ${galleryName}`);
 }
 
 async function highlightSourceImageOnPage(sourceUrl) {
@@ -1646,7 +2509,7 @@ async function normalizeRemoteImage(url) {
   }
 }
 
-async function addManualImages(files) {
+async function addManualImages(files, uploadTarget = null) {
   const validFiles = Array.isArray(files) ? files.filter(Boolean) : [];
   if (validFiles.length === 0) {
     return;
@@ -1677,7 +2540,8 @@ async function addManualImages(files) {
         canHighlight: false,
         sourceUrl: '',
         sourcePath: String(file.webkitRelativePath || file.name || '').trim(),
-        createdAt: Date.now() + created.length
+        createdAt: Date.now() + created.length,
+        savedAt: Date.now() + created.length
       });
     } catch {
       skipped += 1;
@@ -1689,6 +2553,55 @@ async function addManualImages(files) {
     return;
   }
 
+  const target = resolveManualUploadTarget(uploadTarget);
+  let stored = false;
+
+  if (target.mode === 'existing') {
+    stored = await addManualImagesToExistingGallery(created, target.galleryId);
+  } else if (target.mode === 'new') {
+    stored = await addManualImagesToNamedGallery(created, target.name);
+  } else {
+    stored = await addManualImagesToManualGallery(created);
+  }
+
+  if (!stored) {
+    return;
+  }
+
+  if (skipped > 0) {
+    showFeedbackToast(`${created.length} pujades, ${skipped} descartades`);
+    return;
+  }
+  showFeedbackToast(`${created.length} imatges pujades`);
+}
+
+function resolveManualUploadTarget(uploadTarget) {
+  if (!uploadTarget || typeof uploadTarget !== 'object') {
+    return { mode: 'manual' };
+  }
+
+  const mode = String(uploadTarget.mode || '').trim();
+  if (mode === 'existing') {
+    const galleryId = String(uploadTarget.galleryId || '').trim();
+    if (galleryId) {
+      return { mode: 'existing', galleryId };
+    }
+    return { mode: 'manual' };
+  }
+
+  if (mode === 'new') {
+    const rawName = String(uploadTarget.name || '').trim();
+    if (rawName) {
+      const name = sanitizeGalleryName(rawName, 'Galeria');
+      return { mode: 'new', name };
+    }
+    return { mode: 'manual' };
+  }
+
+  return { mode: 'manual' };
+}
+
+async function addManualImagesToManualGallery(created) {
   const previousSelected = new Set(state.selectedManualIds);
   state.manualItems = [...created, ...state.manualItems].slice(0, MAX_MANUAL_IMAGES);
   const validIds = new Set(state.manualItems.map((item) => String(item.id || '').trim()).filter(Boolean));
@@ -1711,12 +2624,117 @@ async function addManualImages(files) {
   state.galleryListMode = 'detail';
   state.activeGalleryId = MANUAL_GALLERY_ID;
   renderActiveLogoLibraryGrid();
+  return true;
+}
 
-  if (skipped > 0) {
-    showFeedbackToast(`${created.length} pujades, ${skipped} descartades`);
-    return;
+async function addManualImagesToExistingGallery(created, galleryId) {
+  const safeGalleryId = String(galleryId || '').trim();
+  if (!safeGalleryId) {
+    return addManualImagesToManualGallery(created);
   }
-  showFeedbackToast(`${created.length} imatges pujades`);
+  if (safeGalleryId === MANUAL_GALLERY_ID) {
+    return addManualImagesToManualGallery(created);
+  }
+
+  const existing = state.savedGalleries.find((entry) => String(entry?.id || '').trim() === safeGalleryId);
+  if (!existing) {
+    showFeedbackToast('No s\'ha trobat la galeria seleccionada', 'error');
+    return false;
+  }
+
+  const now = Date.now();
+  const appended = created.map((item, index) => mapManualAssetToGalleryItem(item, now + index));
+  const updatedGallery = {
+    ...existing,
+    updatedAt: now,
+    items: [...appended, ...(Array.isArray(existing.items) ? existing.items : [])]
+  };
+
+  const others = state.savedGalleries.filter((entry) => String(entry?.id || '').trim() !== safeGalleryId);
+  state.savedGalleries = [updatedGallery, ...others].sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+  await persistDomainGalleries();
+
+  state.galleryView = VIEW_LIBRARY;
+  state.galleryListMode = 'detail';
+  state.activeGalleryId = safeGalleryId;
+  setActivePage('library');
+  return true;
+}
+
+async function addManualImagesToNamedGallery(created, rawName) {
+  const { domain, pageOrigin } = resolveGalleryDomainContextFromActiveTab();
+  const galleryName = sanitizeGalleryName(rawName || '', domain);
+  if (!galleryName) {
+    showFeedbackToast('Nom de galeria invalid', 'error');
+    return false;
+  }
+
+  const galleryId = buildCustomGalleryId(galleryName);
+  const existing = state.savedGalleries.find((entry) => String(entry?.id || '').trim() === galleryId);
+  const now = Date.now();
+  const appended = created.map((item, index) => mapManualAssetToGalleryItem(item, now + index));
+
+  const updatedGallery = {
+    id: galleryId,
+    name: galleryName,
+    domain: String(existing?.domain || domain || 'manual.local').trim().toLowerCase(),
+    pageOrigin: String(existing?.pageOrigin || pageOrigin || '').trim(),
+    faviconUrl: String(
+      existing?.faviconUrl ||
+      buildGalleryFaviconUrl(existing?.pageOrigin || pageOrigin, existing?.domain || domain || 'manual.local')
+    ).trim(),
+    updatedAt: now,
+    items: [...appended, ...(Array.isArray(existing?.items) ? existing.items : [])]
+  };
+
+  const others = state.savedGalleries.filter((entry) => String(entry?.id || '').trim() !== galleryId);
+  state.savedGalleries = [updatedGallery, ...others].sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+  await persistDomainGalleries();
+
+  state.galleryView = VIEW_LIBRARY;
+  state.galleryListMode = 'detail';
+  state.activeGalleryId = galleryId;
+  setActivePage('library');
+  return true;
+}
+
+function mapManualAssetToGalleryItem(item, savedAt) {
+  const manualId = String(item?.id || '').trim() || `manual-item-${savedAt}`;
+  return {
+    id: manualId,
+    name: sanitizeDisplayName(item?.name || 'Imatge', 'Imatge'),
+    dataUrl: String(item?.dataUrl || ''),
+    sourceUrl: '',
+    sourcePath: String(item?.sourcePath || '').trim(),
+    fileSize: Math.max(0, Number(item?.fileSize) || 0),
+    width: Math.max(0, Number(item?.width) || 0),
+    height: Math.max(0, Number(item?.height) || 0),
+    htmlWidth: 0,
+    htmlHeight: 0,
+    htmlFixed: false,
+    htmlResponsive: false,
+    htmlUnconstrained: false,
+    canHighlight: false,
+    savedAt: Number(savedAt) || Date.now()
+  };
+}
+
+function resolveGalleryDomainContextFromActiveTab() {
+  let domain = 'manual.local';
+  let pageOrigin = '';
+  try {
+    const parsed = new URL(String(state.activeTabUrl || '').trim());
+    domain = String(parsed.hostname || domain).trim().toLowerCase() || domain;
+    pageOrigin = String(parsed.origin || '').trim();
+  } catch {
+    // keep fallback values
+  }
+  return { domain, pageOrigin };
+}
+
+function buildCustomGalleryId(name) {
+  const safeName = sanitizeGalleryName(name || '', 'galeria').toLowerCase();
+  return `custom:${encodeURIComponent(safeName)}`;
 }
 
 async function removeManualImageById(id) {
@@ -1727,6 +2745,94 @@ async function removeManualImageById(id) {
   }
   state.selectedManualIds.delete(String(id || '').trim());
   await persistManualLibrary();
+  renderActiveLogoLibraryGrid();
+  showFeedbackToast('Imatge eliminada');
+}
+
+async function removeGalleryById(galleryId) {
+  const safeGalleryId = String(galleryId || '').trim();
+  if (!safeGalleryId) {
+    return;
+  }
+
+  if (safeGalleryId === MANUAL_GALLERY_ID) {
+    if (state.manualItems.length === 0) {
+      return;
+    }
+    state.manualItems = [];
+    state.selectedManualIds = new Set();
+    await persistManualLibrary();
+    if (String(state.activeGalleryId || '').trim() === MANUAL_GALLERY_ID) {
+      state.galleryListMode = 'list';
+      state.activeGalleryId = '';
+    }
+    renderActiveLogoLibraryGrid();
+    showFeedbackToast('Galeria eliminada');
+    return;
+  }
+
+  const before = state.savedGalleries.length;
+  state.savedGalleries = state.savedGalleries.filter(
+    (entry) => String(entry?.id || '').trim() !== safeGalleryId
+  );
+  if (state.savedGalleries.length === before) {
+    return;
+  }
+
+  if (String(state.activeGalleryId || '').trim() === safeGalleryId) {
+    state.galleryListMode = 'list';
+    state.activeGalleryId = '';
+  }
+
+  await persistDomainGalleries();
+  renderActiveLogoLibraryGrid();
+  showFeedbackToast('Galeria eliminada');
+}
+
+async function removeStoredGalleryImageById(galleryId, imageId) {
+  const safeGalleryId = String(galleryId || '').trim();
+  const safeImageId = String(imageId || '').trim();
+  if (!safeGalleryId || !safeImageId) {
+    return;
+  }
+
+  if (safeGalleryId === MANUAL_GALLERY_ID) {
+    await removeManualImageById(safeImageId);
+    return;
+  }
+
+  const nextGalleries = [];
+  let removed = false;
+  const now = Date.now();
+
+  for (const gallery of state.savedGalleries) {
+    const currentId = String(gallery?.id || '').trim();
+    if (currentId !== safeGalleryId) {
+      nextGalleries.push(gallery);
+      continue;
+    }
+
+    const items = Array.isArray(gallery.items) ? gallery.items : [];
+    const nextItems = items.filter((item) => String(item?.id || '').trim() !== safeImageId);
+    if (nextItems.length === items.length) {
+      nextGalleries.push(gallery);
+      continue;
+    }
+
+    removed = true;
+    nextGalleries.push({
+      ...gallery,
+      updatedAt: now,
+      items: nextItems
+    });
+  }
+
+  if (!removed) {
+    return;
+  }
+
+  state.savedGalleries = nextGalleries.sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+  await persistDomainGalleries();
   renderActiveLogoLibraryGrid();
   showFeedbackToast('Imatge eliminada');
 }
@@ -1832,7 +2938,9 @@ function normalizeDomainGalleries(raw) {
     }
     const id = String(entry.id || '').trim();
     const domain = String(entry.domain || '').trim().toLowerCase();
+    const name = sanitizeGalleryName(entry.name || '', domain || 'Galeria');
     const pageOrigin = String(entry.pageOrigin || '').trim();
+    const faviconUrl = String(entry.faviconUrl || '').trim();
     const updatedAt = Number(entry.updatedAt) || Date.now();
     if (!id || !domain || seen.has(id)) {
       continue;
@@ -1874,8 +2982,10 @@ function normalizeDomainGalleries(raw) {
     items.sort((a, b) => Number(b.savedAt) - Number(a.savedAt));
     galleries.push({
       id,
+      name,
       domain,
       pageOrigin,
+      faviconUrl: faviconUrl || buildGalleryFaviconUrl(pageOrigin, domain),
       updatedAt,
       items
     });
@@ -1951,6 +3061,15 @@ function normalizeManualLibrary(raw) {
 
 function sanitizeManualName(name) {
   return sanitizeDisplayName(name, 'Imatge manual');
+}
+
+function sanitizeGalleryName(name, fallback = 'Galeria') {
+  const safe = String(name || '').trim();
+  const safeFallback = String(fallback || 'Galeria').trim() || 'Galeria';
+  if (!safe) {
+    return safeFallback;
+  }
+  return safe.length > 512 ? safe.slice(0, 512) : safe;
 }
 
 function sanitizeDisplayName(name, fallback = 'Imatge') {

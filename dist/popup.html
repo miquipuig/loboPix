@@ -120,9 +120,14 @@
         </div>
       </section>
 
-      <button id="saveGalleryFabBtn" class="save-gallery-fab hidden" type="button" aria-label="Guardar en la galeria">
-        Guardar en la galeria
-      </button>
+      <div id="saveGalleryFabGroup" class="save-gallery-fab-group hidden">
+        <button id="saveGalleryFabBtn" class="save-gallery-fab" type="button" aria-label="Guardar per domini">
+          Guardar per domini
+        </button>
+        <button id="saveGalleryAsFabBtn" class="save-gallery-fab save-gallery-as-fab" type="button" aria-label="Guardar como">
+          Guardar como
+        </button>
+      </div>
 
       <nav id="bottomNav" class="bottom-nav" aria-label="Navegacio principal">
         <button id="pageUrlBtn" class="bottom-nav-btn active" type="button" data-page="url" aria-label="Web" title="Web" aria-pressed="true">
@@ -142,6 +147,34 @@
       <div id="feedbackToast" class="popup-toast" role="status" aria-live="polite" aria-hidden="true">
         <span id="feedbackToastIcon" class="popup-toast-icon" aria-hidden="true"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
         <span id="feedbackToastText" class="popup-toast-text"></span>
+      </div>
+
+      <div id="saveAsModal" class="save-as-modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="saveAsModalTitle">
+        <div class="save-as-modal-card">
+          <h3 id="saveAsModalTitle" class="save-as-modal-title">Guardar como</h3>
+          <label for="saveAsNameInput" class="save-as-modal-label">Nom de la galeria</label>
+          <input id="saveAsNameInput" class="save-as-modal-input" type="text" maxlength="512" placeholder="https://example.com/pagina" />
+          <div class="save-as-modal-actions">
+            <button id="saveAsCancelBtn" class="btn btn-outline-secondary btn-sm" type="button">Cancelar</button>
+            <button id="saveAsConfirmBtn" class="btn btn-primary btn-sm" type="button">Guardar</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="manualUploadModal" class="save-as-modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="manualUploadModalTitle">
+        <div class="save-as-modal-card">
+          <h3 id="manualUploadModalTitle" class="save-as-modal-title">Pujar imatges manuals</h3>
+          <label for="manualUploadGallerySelect" class="save-as-modal-label">Galeria existent</label>
+          <select id="manualUploadGallerySelect" class="save-as-modal-input">
+            <option value="">Crear nova galeria</option>
+          </select>
+          <label for="manualUploadNameInput" class="save-as-modal-label">Nom nova galeria</label>
+          <input id="manualUploadNameInput" class="save-as-modal-input" type="text" maxlength="512" placeholder="Nom de la galeria" />
+          <div class="save-as-modal-actions">
+            <button id="manualUploadCancelBtn" class="btn btn-outline-secondary btn-sm" type="button">Cancelar</button>
+            <button id="manualUploadConfirmBtn" class="btn btn-primary btn-sm" type="button">Continuar</button>
+          </div>
+        </div>
       </div>
     </main>
 

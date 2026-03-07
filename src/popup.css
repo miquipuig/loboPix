@@ -1702,6 +1702,44 @@ body {
   flex: 0 0 auto;
 }
 
+.logo-library-item-delete-small {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.94);
+  color: #475569;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  opacity: 0.9;
+  transition:
+    background-color 0.14s ease,
+    color 0.14s ease,
+    transform 0.14s ease;
+}
+
+.logo-library-item-delete-small:hover:not(:disabled),
+.logo-library-item-delete-small:focus-visible {
+  background: #fee2e2;
+  color: #b91c1c;
+  transform: translateY(-1px);
+}
+
+.logo-library-item-delete-small .bi {
+  width: 12px;
+  height: 12px;
+  display: block;
+  line-height: 1;
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
 .logo-library-thumb-wrap {
   position: relative;
   width: 100%;
@@ -1826,13 +1864,18 @@ body {
   gap: 4px;
 }
 
+.saved-gallery-entry-wrap {
+  width: 100%;
+  position: relative;
+}
+
 .saved-gallery-entry {
   width: 100%;
   min-height: 78px;
   border: 1px solid #cbd5e1;
   border-radius: 10px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  padding: 10px;
+  padding: 10px 62px 10px 10px;
   text-align: left;
   display: grid;
   gap: 4px;
@@ -1850,13 +1893,84 @@ body {
   outline: none;
 }
 
+.saved-gallery-entry-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.saved-gallery-entry-download,
+.saved-gallery-entry-delete {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.94);
+  color: #475569;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  opacity: 0.9;
+  transition:
+    background-color 0.14s ease,
+    color 0.14s ease,
+    transform 0.14s ease;
+}
+
+.saved-gallery-entry-download:hover:not(:disabled),
+.saved-gallery-entry-download:focus-visible,
+.saved-gallery-entry-delete:hover:not(:disabled),
+.saved-gallery-entry-delete:focus-visible {
+  background: #fee2e2;
+  color: #b91c1c;
+  transform: translateY(-1px);
+}
+
+.saved-gallery-entry-download:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.saved-gallery-entry-download .bi,
+.saved-gallery-entry-delete .bi {
+  width: 12px;
+  height: 12px;
+  display: block;
+  line-height: 1;
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
 .saved-gallery-entry-title {
   font-size: 12px;
   font-weight: 700;
   color: #0f172a;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.saved-gallery-entry-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.saved-gallery-entry-favicon {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid #cbd5e1;
+  background: #e2e8f0;
+  object-fit: cover;
+  flex: 0 0 auto;
 }
 
 .saved-gallery-entry-subtitle {
@@ -1871,6 +1985,18 @@ body {
   font-size: 10px;
   font-weight: 600;
   color: #1e3a8a;
+}
+
+.saved-gallery-entry-size {
+  justify-self: start;
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #334155;
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 2px 8px;
 }
 
 .logo-library-size-legend {
@@ -2236,11 +2362,18 @@ select:disabled {
   transform: none;
 }
 
-.save-gallery-fab {
+.save-gallery-fab-group {
   position: absolute;
   right: 10px;
-  bottom: 78px;
+  bottom: 76px;
   z-index: 64;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.save-gallery-fab {
+  position: static;
   min-height: 34px;
   padding: 0 12px;
   border: 1px solid rgba(29, 78, 216, 0.78);
@@ -2266,6 +2399,77 @@ select:disabled {
   opacity: 0.52;
   cursor: not-allowed;
   box-shadow: none;
+}
+
+.save-gallery-as-fab {
+  border-color: #94a3b8;
+  background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
+  color: #1f2937;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.14);
+}
+
+.save-gallery-as-fab:hover:not(:disabled),
+.save-gallery-as-fab:focus-visible {
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
+}
+
+.save-as-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.save-as-modal-card {
+  width: min(100%, 360px);
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.3);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.save-as-modal-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.save-as-modal-label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.save-as-modal-input {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid #94a3b8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 12px;
+  padding: 6px 9px;
+}
+
+.save-as-modal-input:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 1px;
+}
+
+.save-as-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
 }
 
 .standalone-page {
