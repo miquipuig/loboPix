@@ -1633,6 +1633,44 @@ body {
   flex: 0 0 auto;
 }
 
+.logo-library-item-locate {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.94);
+  color: #475569;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  opacity: 0.9;
+  transition:
+    background-color 0.14s ease,
+    color 0.14s ease,
+    transform 0.14s ease;
+}
+
+.logo-library-item-locate:hover:not(:disabled),
+.logo-library-item-locate:focus-visible {
+  background: #fee2e2;
+  color: #b91c1c;
+  transform: translateY(-1px);
+}
+
+.logo-library-item-locate .bi {
+  width: 12px;
+  height: 12px;
+  display: block;
+  line-height: 1;
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
 .logo-library-thumb-wrap {
   position: relative;
   width: 100%;

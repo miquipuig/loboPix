@@ -109,7 +109,25 @@ function bindEvents() {
   });
 
   elements.logoLibraryGrid.addEventListener('click', (event) => {
-    const deleteButton = event.target.closest('button[data-manual-delete-id]');
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const highlightButton = target.closest('button[data-highlight-source-url]');
+    if (highlightButton && !highlightButton.disabled) {
+      event.preventDefault();
+      event.stopPropagation();
+      const sourceUrl = String(highlightButton.dataset.highlightSourceUrl || '').trim();
+      if (sourceUrl) {
+        void highlightSourceImageOnPage(sourceUrl);
+      } else {
+        showFeedbackToast('No es pot marcar aquesta imatge', 'error');
+      }
+      return;
+    }
+
+    const deleteButton = target.closest('button[data-manual-delete-id]');
     if (!deleteButton || deleteButton.disabled) {
       return;
     }
@@ -360,6 +378,15 @@ function createImageCard(item, options = {}) {
     deleteButton.title = 'Eliminar imatge';
     deleteButton.innerHTML = '<i class="bi bi-trash3" aria-hidden="true"></i>';
     card.appendChild(deleteButton);
+  } else if (item?.sourceUrl && item?.canHighlight) {
+    const highlightButton = document.createElement('button');
+    highlightButton.type = 'button';
+    highlightButton.className = 'logo-library-item-locate';
+    highlightButton.dataset.highlightSourceUrl = String(item.sourceUrl || '').trim();
+    highlightButton.setAttribute('aria-label', `Marcar en web ${item.name}`);
+    highlightButton.title = 'Marcar en web';
+    highlightButton.innerHTML = '<i class="bi bi-eye" aria-hidden="true"></i>';
+    card.appendChild(highlightButton);
   }
 
   return card;
@@ -537,6 +564,7 @@ async function loadWebGallery() {
         htmlFixed: Boolean(candidate.htmlFixed),
         htmlResponsive: Boolean(candidate.htmlResponsive),
         htmlUnconstrained: Boolean(candidate.htmlUnconstrained),
+        canHighlight: Boolean(candidate.htmlLocatable),
         sourceUrl,
         sourcePath: extractSourcePathFromUrl(sourceUrl)
       });
@@ -554,6 +582,177 @@ async function loadWebGallery() {
   } finally {
     state.webLoading = false;
     renderActiveLogoLibraryGrid();
+  }
+}
+
+async function highlightSourceImageOnPage(sourceUrl) {
+  const safeUrl = String(sourceUrl || '').trim();
+  if (!safeUrl || !state.activeTabId) {
+    showFeedbackToast('No es pot marcar aquesta imatge', 'error');
+    return;
+  }
+
+  try {
+    const result = await chrome.scripting.executeScript({
+      target: { tabId: state.activeTabId },
+      func: (targetUrl) => {
+        const styleId = 'lobotinify-highlight-style';
+        const markAttr = 'data-lobotinify-highlight';
+        const markClass = 'lobotinify-highlighted-image';
+        const timerKey = '__lobotinify_highlight_timer__';
+        const base = document.baseURI || location.href;
+
+        const normalizeUrl = (value) => {
+          const raw = String(value || '').trim();
+          if (!raw) {
+            return '';
+          }
+          try {
+            return new URL(raw, base).href;
+          } catch {
+            return '';
+          }
+        };
+        const buildUrlVariants = (value) => {
+          const href = normalizeUrl(value);
+          if (!href) {
+            return [];
+          }
+          try {
+            const parsed = new URL(href);
+            const noHash = `${parsed.origin}${parsed.pathname}${parsed.search}`;
+            const noSearchAndHash = `${parsed.origin}${parsed.pathname}`;
+            return [href, noHash, noSearchAndHash];
+          } catch {
+            return [href];
+          }
+        };
+
+        const clearMarks = () => {
+          const previous = document.querySelectorAll(`[${markAttr}="1"]`);
+          for (const node of previous) {
+            node.classList.remove(markClass);
+            node.removeAttribute(markAttr);
+          }
+        };
+
+        const normalizedTarget = normalizeUrl(targetUrl);
+        if (!normalizedTarget) {
+          clearMarks();
+          return { count: 0 };
+        }
+        const targetVariants = new Set(buildUrlVariants(normalizedTarget));
+        const matchesTarget = (value) => {
+          for (const candidate of buildUrlVariants(value)) {
+            if (targetVariants.has(candidate)) {
+              return true;
+            }
+          }
+          return false;
+        };
+
+        let styleNode = document.getElementById(styleId);
+        if (!styleNode) {
+          styleNode = document.createElement('style');
+          styleNode.id = styleId;
+          styleNode.textContent = `
+            .${markClass} {
+              outline: 3px solid #ef4444 !important;
+              outline-offset: 2px !important;
+              box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.4), 0 0 16px rgba(239, 68, 68, 0.5) !important;
+              border-radius: 4px !important;
+              transition: box-shadow 0.16s ease, outline-color 0.16s ease !important;
+            }
+          `;
+          const host = document.head || document.documentElement;
+          host.appendChild(styleNode);
+        }
+
+        clearMarks();
+
+        const marked = [];
+        const markNode = (node) => {
+          if (!(node instanceof Element) || marked.includes(node)) {
+            return;
+          }
+          node.classList.add(markClass);
+          node.setAttribute(markAttr, '1');
+          marked.push(node);
+        };
+
+        const matchSrcSet = (srcset) => {
+          const raw = String(srcset || '').trim();
+          if (!raw) {
+            return false;
+          }
+          for (const chunk of raw.split(',')) {
+            const [candidate] = chunk.trim().split(/\s+/u);
+            if (matchesTarget(candidate)) {
+              return true;
+            }
+          }
+          return false;
+        };
+
+        const images = document.querySelectorAll('img');
+        for (const node of images) {
+          const currentSrc = node.currentSrc;
+          const src = node.getAttribute('src');
+          const srcsetMatch = matchSrcSet(node.getAttribute('srcset'));
+          if (matchesTarget(currentSrc) || matchesTarget(src) || srcsetMatch) {
+            markNode(node);
+          }
+        }
+
+        const sources = document.querySelectorAll('source');
+        for (const node of sources) {
+          const src = node.getAttribute('src');
+          const srcsetMatch = matchSrcSet(node.getAttribute('srcset'));
+          if (matchesTarget(src) || srcsetMatch) {
+            const picture = node.closest('picture');
+            const rendered = picture?.querySelector('img') || picture || node;
+            markNode(rendered);
+          }
+        }
+
+        const inlineBackground = document.querySelectorAll('[style*="background-image"]');
+        for (const node of inlineBackground) {
+          const style = String(node.getAttribute('style') || '');
+          const regex = /url\((['"]?)(.*?)\1\)/giu;
+          let match;
+          while ((match = regex.exec(style)) !== null) {
+            if (matchesTarget(match[2])) {
+              markNode(node);
+              break;
+            }
+          }
+        }
+
+        if (window[timerKey]) {
+          clearTimeout(window[timerKey]);
+        }
+        window[timerKey] = setTimeout(() => {
+          clearMarks();
+          window[timerKey] = null;
+        }, 5000);
+
+        if (marked.length > 0) {
+          marked[0].scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        }
+        return { count: marked.length };
+      },
+      args: [safeUrl]
+    });
+
+    const count = Math.max(0, Number(result?.[0]?.result?.count) || 0);
+    if (count > 0) {
+      showFeedbackToast(`${count} imatge(s) marcada(es)`);
+      return;
+    }
+    showFeedbackToast('No s\'ha pogut marcar a la web', 'error');
+  } catch (error) {
+    console.error('Highlight image failed', error);
+    showFeedbackToast('No s\'ha pogut marcar a la web', 'error');
   }
 }
 
@@ -650,13 +849,21 @@ async function collectWebImageCandidates(tabId, tabUrl) {
       };
       const upsert = (
         resolved,
-        dimensions = { width: 0, height: 0, fixed: false, responsive: false, unconstrained: false }
+        dimensions = {
+          width: 0,
+          height: 0,
+          fixed: false,
+          responsive: false,
+          unconstrained: false,
+          locatable: false
+        }
       ) => {
         const width = clampDimension(dimensions.width);
         const height = clampDimension(dimensions.height);
         const fixed = Boolean(dimensions.fixed);
         const responsive = Boolean(dimensions.responsive);
         const unconstrained = Boolean(dimensions.unconstrained);
+        const locatable = Boolean(dimensions.locatable);
 
         let existing = found.get(resolved);
         if (!existing) {
@@ -665,6 +872,7 @@ async function collectWebImageCandidates(tabId, tabUrl) {
             hasFixed: false,
             hasResponsive: false,
             hasUnconstrained: false,
+            hasLocatable: false,
             bestFixed: null,
             bestAny: null
           };
@@ -674,6 +882,7 @@ async function collectWebImageCandidates(tabId, tabUrl) {
         existing.hasFixed = existing.hasFixed || fixed;
         existing.hasResponsive = existing.hasResponsive || responsive;
         existing.hasUnconstrained = existing.hasUnconstrained || unconstrained;
+        existing.hasLocatable = existing.hasLocatable || locatable;
 
         if (width > 0 && height > 0) {
           const metric = createMetric(width, height);
@@ -729,7 +938,8 @@ async function collectWebImageCandidates(tabId, tabUrl) {
           htmlHeight: preferred ? preferred.height : 0,
           htmlFixed: entry.hasFixed && !entry.hasResponsive,
           htmlResponsive: entry.hasResponsive,
-          htmlUnconstrained: entry.hasUnconstrained && !entry.hasFixed && !entry.hasResponsive
+          htmlUnconstrained: entry.hasUnconstrained && !entry.hasFixed && !entry.hasResponsive,
+          htmlLocatable: entry.hasLocatable
         };
       };
 
@@ -748,7 +958,8 @@ async function collectWebImageCandidates(tabId, tabUrl) {
           ...getRectSize(node),
           fixed: sizing.fixed,
           responsive: sizing.responsive,
-          unconstrained: sizing.unconstrained
+          unconstrained: sizing.unconstrained,
+          locatable: true
         };
         pushUrl(node.currentSrc, dimensions);
         pushUrl(node.getAttribute('src'), dimensions);
@@ -763,7 +974,8 @@ async function collectWebImageCandidates(tabId, tabUrl) {
           ...getRectSize(parent),
           fixed: sizing.fixed,
           responsive: sizing.responsive,
-          unconstrained: sizing.unconstrained
+          unconstrained: sizing.unconstrained,
+          locatable: true
         };
         pushUrl(node.getAttribute('src'), dimensions);
         pushSrcSet(node.getAttribute('srcset'), dimensions);
@@ -776,7 +988,8 @@ async function collectWebImageCandidates(tabId, tabUrl) {
           ...getRectSize(node),
           fixed: sizing.fixed,
           responsive: sizing.responsive,
-          unconstrained: sizing.unconstrained
+          unconstrained: sizing.unconstrained,
+          locatable: true
         };
         const style = String(node.getAttribute('style') || '');
         const regex = /url\((['"]?)(.*?)\1\)/giu;
@@ -798,7 +1011,8 @@ async function collectWebImageCandidates(tabId, tabUrl) {
       htmlHeight: Math.max(0, Math.round(Number(entry?.htmlHeight) || 0)),
       htmlFixed: Boolean(entry?.htmlFixed),
       htmlResponsive: Boolean(entry?.htmlResponsive),
-      htmlUnconstrained: Boolean(entry?.htmlUnconstrained)
+      htmlUnconstrained: Boolean(entry?.htmlUnconstrained),
+      htmlLocatable: Boolean(entry?.htmlLocatable)
     }))
     .filter((entry) => Boolean(entry.url));
 
@@ -809,7 +1023,8 @@ async function collectWebImageCandidates(tabId, tabUrl) {
       htmlHeight: 0,
       htmlFixed: false,
       htmlResponsive: false,
-      htmlUnconstrained: false
+      htmlUnconstrained: false,
+      htmlLocatable: false
     })
   );
 
@@ -827,7 +1042,8 @@ async function collectWebImageCandidates(tabId, tabUrl) {
       htmlHeight: Math.max(0, Number(entry?.htmlHeight) || 0),
       htmlFixed: Boolean(entry?.htmlFixed),
       htmlResponsive: Boolean(entry?.htmlResponsive),
-      htmlUnconstrained: Boolean(entry?.htmlUnconstrained)
+      htmlUnconstrained: Boolean(entry?.htmlUnconstrained),
+      htmlLocatable: Boolean(entry?.htmlLocatable)
     };
     const existing = uniqueByUrl.get(safeUrl);
     if (!existing) {
@@ -840,6 +1056,7 @@ async function collectWebImageCandidates(tabId, tabUrl) {
       const next = { ...candidate };
       next.htmlResponsive = existing.htmlResponsive || candidate.htmlResponsive;
       next.htmlUnconstrained = existing.htmlUnconstrained || candidate.htmlUnconstrained;
+      next.htmlLocatable = existing.htmlLocatable || candidate.htmlLocatable;
       next.htmlFixed = Boolean(next.htmlFixed) && !next.htmlResponsive;
       if (next.htmlResponsive || next.htmlFixed) {
         next.htmlUnconstrained = false;
@@ -851,6 +1068,7 @@ async function collectWebImageCandidates(tabId, tabUrl) {
       const next = { ...candidate };
       next.htmlResponsive = existing.htmlResponsive || candidate.htmlResponsive;
       next.htmlUnconstrained = existing.htmlUnconstrained || candidate.htmlUnconstrained;
+      next.htmlLocatable = existing.htmlLocatable || candidate.htmlLocatable;
       next.htmlFixed = Boolean(next.htmlFixed) && !next.htmlResponsive;
       if (next.htmlResponsive || next.htmlFixed) {
         next.htmlUnconstrained = false;
@@ -861,6 +1079,7 @@ async function collectWebImageCandidates(tabId, tabUrl) {
 
     existing.htmlResponsive = existing.htmlResponsive || candidate.htmlResponsive;
     existing.htmlUnconstrained = existing.htmlUnconstrained || candidate.htmlUnconstrained;
+    existing.htmlLocatable = existing.htmlLocatable || candidate.htmlLocatable;
     existing.htmlFixed = Boolean(existing.htmlFixed) && !existing.htmlResponsive;
     if (existing.htmlResponsive || existing.htmlFixed) {
       existing.htmlUnconstrained = false;
@@ -910,6 +1129,7 @@ async function addManualImages(files) {
         htmlFixed: false,
         htmlResponsive: false,
         htmlUnconstrained: false,
+        canHighlight: false,
         sourceUrl: '',
         sourcePath: String(file.webkitRelativePath || file.name || '').trim(),
         createdAt: Date.now() + created.length
@@ -1038,6 +1258,7 @@ function normalizeManualLibrary(raw) {
     const htmlFixed = Boolean(entry.htmlFixed);
     const htmlResponsive = Boolean(entry.htmlResponsive);
     const htmlUnconstrained = Boolean(entry.htmlUnconstrained);
+    const canHighlight = Boolean(entry.canHighlight);
     const sourceUrl = String(entry.sourceUrl || '').trim();
     const sourcePath = String(entry.sourcePath || '').trim();
     const createdAt = Number(entry.createdAt) || Date.now();
@@ -1056,6 +1277,7 @@ function normalizeManualLibrary(raw) {
       htmlFixed,
       htmlResponsive,
       htmlUnconstrained,
+      canHighlight,
       sourceUrl,
       sourcePath,
       createdAt
