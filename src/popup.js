@@ -520,9 +520,15 @@ function updateSaveGalleryFabVisibility() {
   }
   const visible = state.activePage === 'url' && state.galleryView === VIEW_WEB;
   const enabled = visible && !state.webLoading && state.webItems.length > 0;
+  const domainContext = getActiveTabDomainContext();
   elements.saveGalleryFabGroup.classList.toggle('hidden', !visible);
-  elements.saveGalleryFabBtn.disabled = !enabled;
+  elements.saveGalleryFabBtn.disabled = !enabled || !domainContext.isValid;
   elements.saveGalleryAsFabBtn.disabled = !enabled;
+  if (domainContext.isValid) {
+    elements.saveGalleryFabBtn.removeAttribute('title');
+  } else {
+    elements.saveGalleryFabBtn.title = 'Domini no valid';
+  }
   if (!visible) {
     closeSaveAsModal();
   }
@@ -537,21 +543,15 @@ function openSaveAsModal() {
     return;
   }
   closeManualUploadModal();
-  let defaultName = String(state.activeTabUrl || '').trim();
-  if (!defaultName) {
-    try {
-      const parsed = new URL(String(state.activeTabUrl || '').trim());
-      defaultName = String(parsed.href || '').trim();
-    } catch {
-      defaultName = '';
-    }
-  }
+  const defaultName = getDefaultSaveAsGalleryName();
   elements.saveAsNameInput.value = defaultName;
   elements.saveAsModal.classList.remove('hidden');
   elements.saveAsModal.setAttribute('aria-hidden', 'false');
   window.requestAnimationFrame(() => {
     elements.saveAsNameInput.focus();
-    elements.saveAsNameInput.select();
+    if (defaultName) {
+      elements.saveAsNameInput.select();
+    }
   });
 }
 
@@ -1798,19 +1798,13 @@ async function saveSelectedWebImagesToDomainGallery(options = {}) {
     return;
   }
 
-  let domain = '';
-  let pageOrigin = '';
-  try {
-    const parsed = new URL(String(state.activeTabUrl || ''));
-    domain = String(parsed.hostname || '').trim().toLowerCase();
-    pageOrigin = String(parsed.origin || '').trim();
-  } catch {
-    domain = '';
-  }
-  if (!domain) {
+  const domainContext = getActiveTabDomainContext();
+  if (!domainContext.isValid || !domainContext.domain) {
     showFeedbackToast('No s\'ha pogut detectar el domini', 'error');
     return;
   }
+  const domain = domainContext.domain;
+  const pageOrigin = domainContext.pageOrigin;
 
   const customNameRaw = String(options.customName || '').trim();
   const hasCustomName = customNameRaw.length > 0;
@@ -2719,7 +2713,52 @@ function mapManualAssetToGalleryItem(item, savedAt) {
   };
 }
 
+function getActiveTabDomainContext() {
+  const rawUrl = String(state.activeTabUrl || '').trim();
+  if (!rawUrl) {
+    return { isValid: false, domain: '', pageOrigin: '', href: '' };
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    const protocol = String(parsed.protocol || '').toLowerCase();
+    const domain = String(parsed.hostname || '').trim().toLowerCase();
+    const isValidProtocol = protocol === 'http:' || protocol === 'https:';
+    if (!isValidProtocol || !domain) {
+      return { isValid: false, domain: '', pageOrigin: '', href: '' };
+    }
+    return {
+      isValid: true,
+      domain,
+      pageOrigin: String(parsed.origin || '').trim(),
+      href: String(parsed.href || rawUrl).trim()
+    };
+  } catch {
+    return { isValid: false, domain: '', pageOrigin: '', href: '' };
+  }
+}
+
+function getDefaultSaveAsGalleryName() {
+  const context = getActiveTabDomainContext();
+  if (!context.isValid) {
+    return '';
+  }
+  const href = String(context.href || '').trim();
+  if (!href) {
+    return '';
+  }
+  return href.length > 512 ? href.slice(0, 512) : href;
+}
+
 function resolveGalleryDomainContextFromActiveTab() {
+  const context = getActiveTabDomainContext();
+  if (context.isValid && context.domain) {
+    return {
+      domain: context.domain,
+      pageOrigin: context.pageOrigin
+    };
+  }
+
   let domain = 'manual.local';
   let pageOrigin = '';
   try {
