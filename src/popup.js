@@ -3,7 +3,6 @@ const VIEW_LIBRARY = 'library';
 const STORAGE_KEY_MANUAL_LIBRARY = 'manualImageLibrary';
 const STORAGE_KEY_DOMAIN_GALLERIES = 'domainImageGalleries';
 const MAX_MANUAL_IMAGES = 80;
-const MAX_WEB_IMAGES = 80;
 const MANUAL_GALLERY_ID = 'manual-gallery';
 
 const elements = {
@@ -13,9 +12,11 @@ const elements = {
   logoLibraryTitleText: document.getElementById('logoLibraryTitleText'),
   logoLibraryCloseBtn: document.getElementById('logoLibraryCloseBtn'),
   logoUploadBtn: document.getElementById('logoUploadBtn'),
-  logoUsePageBtn: document.getElementById('logoUsePageBtn'),
-  logoUsePageBtnIcon: document.getElementById('logoUsePageBtnIcon'),
-  logoUsePageBtnText: document.getElementById('logoUsePageBtnText'),
+  selectAllWebBtn: document.getElementById('selectAllWebBtn'),
+  selectAllWebBtnIcon: document.getElementById('selectAllWebBtnIcon'),
+  selectAllWebBtnText: document.getElementById('selectAllWebBtnText'),
+  galleryBackBtn: document.getElementById('galleryBackBtn'),
+  thumbColsSliderWrap: document.getElementById('thumbColsSliderWrap'),
   thumbColsSlider: document.getElementById('thumbColsSlider'),
   logoUploadInput: document.getElementById('logoUploadInput'),
   logoLibraryDropHint: document.getElementById('logoLibraryDropHint'),
@@ -23,6 +24,7 @@ const elements = {
   userPage: document.getElementById('userPage'),
   aboutPage: document.getElementById('aboutPage'),
   pageUrlBtn: document.getElementById('pageUrlBtn'),
+  pageLibraryBtn: document.getElementById('pageLibraryBtn'),
   pageUserBtn: document.getElementById('pageUserBtn'),
   pageAboutBtn: document.getElementById('pageAboutBtn'),
   saveGalleryFabBtn: document.getElementById('saveGalleryFabBtn'),
@@ -68,10 +70,18 @@ async function init() {
 
 function bindEvents() {
   elements.pageUrlBtn.addEventListener('click', () => {
+    state.galleryView = VIEW_WEB;
     setActivePage('url');
-    if (state.galleryView === VIEW_WEB && state.webItems.length === 0 && !state.webLoading) {
+    if (state.webItems.length === 0 && !state.webLoading) {
       void loadWebGallery();
     }
+  });
+
+  elements.pageLibraryBtn.addEventListener('click', () => {
+    state.galleryView = VIEW_LIBRARY;
+    state.galleryListMode = 'list';
+    state.activeGalleryId = '';
+    setActivePage('library');
   });
 
   elements.pageUserBtn.addEventListener('click', () => {
@@ -82,22 +92,23 @@ function bindEvents() {
     setActivePage('about');
   });
 
-  elements.logoUsePageBtn.addEventListener('click', () => {
-    if (state.galleryView === VIEW_WEB) {
-      state.galleryView = VIEW_LIBRARY;
-      state.galleryListMode = 'list';
-      state.activeGalleryId = '';
-      renderActiveLogoLibraryGrid();
-      return;
-    }
-    state.galleryView = VIEW_WEB;
-    renderActiveLogoLibraryGrid();
-    void loadWebGallery();
-  });
-
   if (elements.saveGalleryFabBtn instanceof HTMLButtonElement) {
     elements.saveGalleryFabBtn.addEventListener('click', () => {
       void saveSelectedWebImagesToDomainGallery();
+    });
+  }
+
+  if (elements.galleryBackBtn instanceof HTMLButtonElement) {
+    elements.galleryBackBtn.addEventListener('click', () => {
+      state.galleryListMode = 'list';
+      state.activeGalleryId = '';
+      renderActiveLogoLibraryGrid();
+    });
+  }
+
+  if (elements.selectAllWebBtn instanceof HTMLButtonElement) {
+    elements.selectAllWebBtn.addEventListener('click', () => {
+      toggleSelectAllWebImages();
     });
   }
 
@@ -263,10 +274,10 @@ function bindEvents() {
 }
 
 function setActivePage(page) {
-  const safe = page === 'user' || page === 'about' ? page : 'url';
+  const safe = page === 'user' || page === 'about' || page === 'library' ? page : 'url';
   state.activePage = safe;
 
-  const isGallery = safe === 'url';
+  const isGallery = safe === 'url' || safe === 'library';
   elements.popupRoot.classList.toggle('gallery-tab-active', isGallery);
 
   elements.logoLibraryOverlay.classList.toggle('hidden', !isGallery);
@@ -275,6 +286,7 @@ function setActivePage(page) {
   elements.aboutPage.classList.toggle('hidden', safe !== 'about');
 
   setNavButtonState(elements.pageUrlBtn, safe === 'url');
+  setNavButtonState(elements.pageLibraryBtn, safe === 'library');
   setNavButtonState(elements.pageUserBtn, safe === 'user');
   setNavButtonState(elements.pageAboutBtn, safe === 'about');
 
@@ -282,7 +294,9 @@ function setActivePage(page) {
     renderActiveLogoLibraryGrid();
     return;
   }
+  updateUploadButtonVisibility();
   updateSaveGalleryFabVisibility();
+  updateSelectAllWebButtonState();
 }
 
 function setNavButtonState(button, active) {
@@ -311,20 +325,25 @@ function renderLocalizedCopy() {
 
 function updateGalleryHeader() {
   const showingWeb = state.galleryView === VIEW_WEB;
-  elements.logoLibraryTitleText.textContent = showingWeb ? 'Imatges web' : 'Llistes de galeries';
-  elements.logoLibraryTitleIcon.innerHTML = showingWeb
-    ? '<i class="bi bi-globe2" aria-hidden="true"></i>'
-    : '<i class="bi bi-images" aria-hidden="true"></i>';
-}
+  if (showingWeb) {
+    elements.logoLibraryTitleText.textContent = 'Imatges web';
+    elements.logoLibraryTitleIcon.innerHTML = '<i class="bi bi-globe2" aria-hidden="true"></i>';
+    return;
+  }
 
-function updateToggleButtonCopy() {
-  const showingWeb = state.galleryView === VIEW_WEB;
-  const text = showingWeb ? 'Veure llistes d\'imatges' : 'Veure web';
-  elements.logoUsePageBtnText.textContent = text;
-  elements.logoUsePageBtn.setAttribute('aria-label', text);
-  elements.logoUsePageBtnIcon.innerHTML = showingWeb
-    ? '<i class="bi bi-images" aria-hidden="true"></i>'
-    : '<i class="bi bi-globe2" aria-hidden="true"></i>';
+  if (state.galleryListMode === 'detail' && state.activeGalleryId) {
+    if (state.activeGalleryId === MANUAL_GALLERY_ID) {
+      elements.logoLibraryTitleText.textContent = 'Galeria manual';
+    } else {
+      const gallery = state.savedGalleries.find(
+        (entry) => String(entry?.id || '').trim() === String(state.activeGalleryId || '').trim()
+      );
+      elements.logoLibraryTitleText.textContent = String(gallery?.domain || 'Galeria');
+    }
+  } else {
+    elements.logoLibraryTitleText.textContent = 'Galeries';
+  }
+  elements.logoLibraryTitleIcon.innerHTML = '<i class="bi bi-images" aria-hidden="true"></i>';
 }
 
 function updateSaveGalleryFabVisibility() {
@@ -334,6 +353,95 @@ function updateSaveGalleryFabVisibility() {
   const visible = state.activePage === 'url' && state.galleryView === VIEW_WEB;
   elements.saveGalleryFabBtn.classList.toggle('hidden', !visible);
   elements.saveGalleryFabBtn.disabled = !visible || state.webLoading || state.webItems.length === 0;
+}
+
+function updateUploadButtonVisibility() {
+  if (!(elements.logoUploadBtn instanceof HTMLButtonElement)) {
+    return;
+  }
+  const visible =
+    state.galleryView === VIEW_LIBRARY &&
+    (state.activePage === 'library' || state.activePage === 'url');
+  elements.logoUploadBtn.classList.toggle('hidden', !visible);
+  elements.logoUploadBtn.disabled = !visible;
+}
+
+function areAllWebImagesSelected() {
+  if (state.webItems.length === 0) {
+    return false;
+  }
+  for (const item of state.webItems) {
+    const id = String(item?.id || '').trim();
+    if (!id || !state.selectedWebIds.has(id)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function updateSelectAllWebButtonState() {
+  if (!(elements.selectAllWebBtn instanceof HTMLButtonElement)) {
+    return;
+  }
+  const visible = state.activePage === 'url' && state.galleryView === VIEW_WEB;
+  elements.selectAllWebBtn.classList.toggle('hidden', !visible);
+  if (!visible) {
+    return;
+  }
+
+  const canInteract = !state.webLoading && state.webItems.length > 0;
+  const allSelected = canInteract && areAllWebImagesSelected();
+  const text = allSelected ? 'Deseleccionar todo' : 'Seleccionar todo';
+
+  elements.selectAllWebBtn.disabled = !canInteract;
+  elements.selectAllWebBtn.classList.toggle('active', allSelected);
+  elements.selectAllWebBtn.setAttribute('aria-pressed', allSelected ? 'true' : 'false');
+  elements.selectAllWebBtn.setAttribute('aria-label', text);
+  if (elements.selectAllWebBtnText) {
+    elements.selectAllWebBtnText.textContent = text;
+  }
+  if (elements.selectAllWebBtnIcon) {
+    elements.selectAllWebBtnIcon.innerHTML = allSelected
+      ? '<i class="bi bi-check2-square" aria-hidden="true"></i>'
+      : '<i class="bi bi-square" aria-hidden="true"></i>';
+  }
+}
+
+function updateThumbnailSliderVisibility() {
+  const wrap = elements.thumbColsSliderWrap;
+  if (!(wrap instanceof HTMLElement)) {
+    return;
+  }
+  const albumOpen =
+    state.galleryView === VIEW_LIBRARY &&
+    state.galleryListMode === 'detail' &&
+    Boolean(String(state.activeGalleryId || '').trim());
+  const webGallery = state.galleryView === VIEW_WEB;
+  const sliderVisible = webGallery || albumOpen;
+  wrap.classList.toggle('hidden', !sliderVisible);
+  if (elements.thumbColsSlider instanceof HTMLInputElement) {
+    elements.thumbColsSlider.disabled = !sliderVisible;
+  }
+  if (elements.galleryBackBtn instanceof HTMLButtonElement) {
+    elements.galleryBackBtn.classList.toggle('hidden', !albumOpen);
+    elements.galleryBackBtn.disabled = !albumOpen;
+  }
+  elements.popupRoot.classList.toggle('library-album-open', albumOpen);
+}
+
+function toggleSelectAllWebImages() {
+  if (state.webLoading || state.webItems.length === 0) {
+    return;
+  }
+  if (areAllWebImagesSelected()) {
+    state.selectedWebIds.clear();
+    renderActiveLogoLibraryGrid();
+    return;
+  }
+  state.selectedWebIds = new Set(
+    state.webItems.map((item) => String(item?.id || '').trim()).filter(Boolean)
+  );
+  renderActiveLogoLibraryGrid();
 }
 
 function setThumbnailColumns(columns) {
@@ -353,8 +461,10 @@ function syncThumbnailColumnSlider() {
 
 function renderActiveLogoLibraryGrid() {
   updateGalleryHeader();
-  updateToggleButtonCopy();
+  updateUploadButtonVisibility();
   updateSaveGalleryFabVisibility();
+  updateSelectAllWebButtonState();
+  updateThumbnailSliderVisibility();
   if (state.galleryView === VIEW_WEB) {
     renderWebGrid();
     return;
@@ -476,24 +586,7 @@ function renderGalleryDetailGrid() {
   grid.replaceChildren();
   grid.classList.remove('loading-state');
 
-  const toolbar = document.createElement('div');
-  toolbar.className = 'saved-gallery-toolbar';
-
-  const backButton = document.createElement('button');
-  backButton.type = 'button';
-  backButton.className = 'btn btn-outline-secondary btn-sm saved-gallery-back-btn';
-  backButton.dataset.galleryBack = '1';
-  backButton.innerHTML = '<i class="bi bi-arrow-left" aria-hidden="true"></i><span>Tornar</span>';
-
-  const title = document.createElement('span');
-  title.className = 'saved-gallery-title';
-
-  toolbar.appendChild(backButton);
-  toolbar.appendChild(title);
-  grid.appendChild(toolbar);
-
   if (state.activeGalleryId === MANUAL_GALLERY_ID) {
-    title.textContent = 'Galeria manual';
     if (state.manualItems.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'logo-library-empty';
@@ -516,8 +609,6 @@ function renderGalleryDetailGrid() {
     renderGalleryListGrid();
     return;
   }
-
-  title.textContent = String(gallery.domain || 'Galeria');
   if (!Array.isArray(gallery.items) || gallery.items.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'logo-library-empty';
@@ -799,9 +890,6 @@ async function loadWebGallery() {
     let index = 1;
 
     for (const candidate of candidates) {
-      if (normalized.length >= MAX_WEB_IMAGES) {
-        break;
-      }
       const asset = await normalizeRemoteImage(candidate.url);
       if (!asset || !asset.dataUrl || seenData.has(asset.dataUrl)) {
         continue;
@@ -1722,6 +1810,11 @@ async function persistDomainGalleries() {
     });
   } catch (error) {
     console.error('Domain galleries save failed', error);
+    const message = String(error?.message || '').toLowerCase();
+    if (message.includes('quota')) {
+      showFeedbackToast('No s\'han pogut desar les galeries: limit d\'espai', 'error');
+      return;
+    }
     showFeedbackToast('No s\'han pogut desar les galeries', 'error');
   }
 }
