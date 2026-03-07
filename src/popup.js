@@ -1,8 +1,10 @@
 const VIEW_WEB = 'web';
-const VIEW_MANUAL = 'manual';
+const VIEW_LIBRARY = 'library';
 const STORAGE_KEY_MANUAL_LIBRARY = 'manualImageLibrary';
+const STORAGE_KEY_DOMAIN_GALLERIES = 'domainImageGalleries';
 const MAX_MANUAL_IMAGES = 80;
 const MAX_WEB_IMAGES = 80;
+const MANUAL_GALLERY_ID = 'manual-gallery';
 
 const elements = {
   popupRoot: document.getElementById('popupRoot'),
@@ -23,6 +25,7 @@ const elements = {
   pageUrlBtn: document.getElementById('pageUrlBtn'),
   pageUserBtn: document.getElementById('pageUserBtn'),
   pageAboutBtn: document.getElementById('pageAboutBtn'),
+  saveGalleryFabBtn: document.getElementById('saveGalleryFabBtn'),
   aboutVersion: document.getElementById('aboutVersion'),
   aboutSignatureTitle: document.getElementById('aboutSignatureTitle'),
   feedbackToast: document.getElementById('feedbackToast'),
@@ -36,8 +39,13 @@ const state = {
   activeTabId: null,
   activeTabUrl: '',
   webItems: [],
+  selectedWebIds: new Set(),
   webLoading: false,
   manualItems: [],
+  selectedManualIds: new Set(),
+  savedGalleries: [],
+  galleryListMode: 'list',
+  activeGalleryId: '',
   thumbnailColumns: 4,
   toastTimer: null,
   fileDragDepth: 0,
@@ -52,6 +60,7 @@ async function init() {
   renderLocalizedCopy();
   renderVersion();
   await loadManualLibrary();
+  await loadDomainGalleries();
   await resolveActiveTabContext();
   setActivePage('url');
   await loadWebGallery();
@@ -75,7 +84,9 @@ function bindEvents() {
 
   elements.logoUsePageBtn.addEventListener('click', () => {
     if (state.galleryView === VIEW_WEB) {
-      state.galleryView = VIEW_MANUAL;
+      state.galleryView = VIEW_LIBRARY;
+      state.galleryListMode = 'list';
+      state.activeGalleryId = '';
       renderActiveLogoLibraryGrid();
       return;
     }
@@ -83,6 +94,12 @@ function bindEvents() {
     renderActiveLogoLibraryGrid();
     void loadWebGallery();
   });
+
+  if (elements.saveGalleryFabBtn instanceof HTMLButtonElement) {
+    elements.saveGalleryFabBtn.addEventListener('click', () => {
+      void saveSelectedWebImagesToDomainGallery();
+    });
+  }
 
   if (elements.thumbColsSlider instanceof HTMLInputElement) {
     const onColumnsChange = () => {
@@ -116,6 +133,26 @@ function bindEvents() {
       return;
     }
 
+    const backButton = target.closest('button[data-gallery-back]');
+    if (backButton) {
+      state.galleryListMode = 'list';
+      state.activeGalleryId = '';
+      renderActiveLogoLibraryGrid();
+      return;
+    }
+
+    const openGalleryButton = target.closest('button[data-gallery-open-id]');
+    if (openGalleryButton && !openGalleryButton.disabled) {
+      const galleryId = String(openGalleryButton.dataset.galleryOpenId || '').trim();
+      if (!galleryId) {
+        return;
+      }
+      state.galleryListMode = 'detail';
+      state.activeGalleryId = galleryId;
+      renderActiveLogoLibraryGrid();
+      return;
+    }
+
     const highlightButton = target.closest('button[data-highlight-source-url]');
     if (highlightButton && !highlightButton.disabled) {
       event.preventDefault();
@@ -130,14 +167,25 @@ function bindEvents() {
     }
 
     const deleteButton = target.closest('button[data-manual-delete-id]');
-    if (!deleteButton || deleteButton.disabled) {
+    if (deleteButton && !deleteButton.disabled) {
+      const id = String(deleteButton.dataset.manualDeleteId || '');
+      if (!id) {
+        return;
+      }
+      void removeManualImageById(id);
       return;
     }
-    const id = String(deleteButton.dataset.manualDeleteId || '');
-    if (!id) {
+
+    const selectButton = target.closest('button.logo-library-item-select');
+    if (!selectButton || selectButton.disabled) {
       return;
     }
-    void removeManualImageById(id);
+    const imageId = String(selectButton.dataset.imageId || '').trim();
+    if (!imageId) {
+      return;
+    }
+    const isManual = selectButton.dataset.imageManual === '1';
+    toggleImageSelection(imageId, { manual: isManual });
   });
 
   elements.popupRoot.addEventListener('dragenter', (event) => {
@@ -148,7 +196,9 @@ function bindEvents() {
     state.fileDragDepth += 1;
     if (!state.fileDragActive) {
       state.fileDragActive = true;
-      state.galleryView = VIEW_MANUAL;
+      state.galleryView = VIEW_LIBRARY;
+      state.galleryListMode = 'detail';
+      state.activeGalleryId = MANUAL_GALLERY_ID;
       renderActiveLogoLibraryGrid();
     }
     setDropHintVisible(true);
@@ -165,7 +215,9 @@ function bindEvents() {
     if (!state.fileDragActive) {
       state.fileDragActive = true;
       state.fileDragDepth = Math.max(1, state.fileDragDepth);
-      state.galleryView = VIEW_MANUAL;
+      state.galleryView = VIEW_LIBRARY;
+      state.galleryListMode = 'detail';
+      state.activeGalleryId = MANUAL_GALLERY_ID;
       renderActiveLogoLibraryGrid();
       setDropHintVisible(true);
     }
@@ -194,7 +246,9 @@ function bindEvents() {
     event.preventDefault();
     const imageFiles = getDroppedImageFiles(event.dataTransfer);
     resetDropState();
-    state.galleryView = VIEW_MANUAL;
+    state.galleryView = VIEW_LIBRARY;
+    state.galleryListMode = 'detail';
+    state.activeGalleryId = MANUAL_GALLERY_ID;
     renderActiveLogoLibraryGrid();
     if (imageFiles.length === 0) {
       showFeedbackToast('Nomes es permeten fitxers d\'imatge', 'error');
@@ -226,7 +280,9 @@ function setActivePage(page) {
 
   if (isGallery) {
     renderActiveLogoLibraryGrid();
+    return;
   }
+  updateSaveGalleryFabVisibility();
 }
 
 function setNavButtonState(button, active) {
@@ -255,7 +311,7 @@ function renderLocalizedCopy() {
 
 function updateGalleryHeader() {
   const showingWeb = state.galleryView === VIEW_WEB;
-  elements.logoLibraryTitleText.textContent = showingWeb ? 'Imatges web' : 'Galeria manual';
+  elements.logoLibraryTitleText.textContent = showingWeb ? 'Imatges web' : 'Llistes de galeries';
   elements.logoLibraryTitleIcon.innerHTML = showingWeb
     ? '<i class="bi bi-globe2" aria-hidden="true"></i>'
     : '<i class="bi bi-images" aria-hidden="true"></i>';
@@ -263,12 +319,21 @@ function updateGalleryHeader() {
 
 function updateToggleButtonCopy() {
   const showingWeb = state.galleryView === VIEW_WEB;
-  const text = showingWeb ? 'Veure manuals' : 'Veure web';
+  const text = showingWeb ? 'Veure llistes d\'imatges' : 'Veure web';
   elements.logoUsePageBtnText.textContent = text;
   elements.logoUsePageBtn.setAttribute('aria-label', text);
   elements.logoUsePageBtnIcon.innerHTML = showingWeb
     ? '<i class="bi bi-images" aria-hidden="true"></i>'
     : '<i class="bi bi-globe2" aria-hidden="true"></i>';
+}
+
+function updateSaveGalleryFabVisibility() {
+  if (!(elements.saveGalleryFabBtn instanceof HTMLButtonElement)) {
+    return;
+  }
+  const visible = state.activePage === 'url' && state.galleryView === VIEW_WEB;
+  elements.saveGalleryFabBtn.classList.toggle('hidden', !visible);
+  elements.saveGalleryFabBtn.disabled = !visible || state.webLoading || state.webItems.length === 0;
 }
 
 function setThumbnailColumns(columns) {
@@ -289,15 +354,17 @@ function syncThumbnailColumnSlider() {
 function renderActiveLogoLibraryGrid() {
   updateGalleryHeader();
   updateToggleButtonCopy();
+  updateSaveGalleryFabVisibility();
   if (state.galleryView === VIEW_WEB) {
     renderWebGrid();
     return;
   }
-  renderManualGrid();
+  renderLibraryGrid();
 }
 
 function renderWebGrid() {
   const grid = elements.logoLibraryGrid;
+  grid.dataset.galleryMode = 'web';
   grid.replaceChildren();
   grid.classList.remove('loading-state');
 
@@ -341,33 +408,217 @@ function renderWebGrid() {
   }
 }
 
-function renderManualGrid() {
+function renderLibraryGrid() {
+  if (state.galleryListMode === 'detail' && state.activeGalleryId) {
+    renderGalleryDetailGrid();
+    return;
+  }
+  renderGalleryListGrid();
+}
+
+function getGalleryCollections() {
+  const collections = [];
+
+  if (state.manualItems.length > 0) {
+    const latestManual = Math.max(...state.manualItems.map((item) => Number(item.createdAt) || 0), 0);
+    collections.push({
+      id: MANUAL_GALLERY_ID,
+      title: 'Manual',
+      subtitle: 'Pujades manuals',
+      count: state.manualItems.length,
+      updatedAt: latestManual,
+      type: 'manual'
+    });
+  }
+
+  for (const gallery of state.savedGalleries) {
+    const domain = String(gallery?.domain || '').trim();
+    if (!domain) {
+      continue;
+    }
+    collections.push({
+      id: String(gallery.id || '').trim(),
+      title: domain,
+      subtitle: 'Web guardada',
+      count: Array.isArray(gallery.items) ? gallery.items.length : 0,
+      updatedAt: Number(gallery.updatedAt) || 0,
+      type: 'domain'
+    });
+  }
+
+  collections.sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+  return collections;
+}
+
+function renderGalleryListGrid() {
   const grid = elements.logoLibraryGrid;
+  grid.dataset.galleryMode = 'library-list';
   grid.replaceChildren();
   grid.classList.remove('loading-state');
 
-  if (state.manualItems.length === 0) {
+  const collections = getGalleryCollections();
+  if (collections.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'logo-library-empty';
-    empty.textContent = 'No tens imatges manuals. Puja fitxers.';
+    empty.textContent = 'Encara no hi ha galeries guardades';
     grid.appendChild(empty);
     return;
   }
 
-  for (const item of state.manualItems) {
-    grid.appendChild(createImageCard(item, { manual: true }));
+  for (const entry of collections) {
+    grid.appendChild(createGalleryListCard(entry));
   }
 }
 
+function renderGalleryDetailGrid() {
+  const grid = elements.logoLibraryGrid;
+  grid.dataset.galleryMode = 'library-detail';
+  grid.replaceChildren();
+  grid.classList.remove('loading-state');
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'saved-gallery-toolbar';
+
+  const backButton = document.createElement('button');
+  backButton.type = 'button';
+  backButton.className = 'btn btn-outline-secondary btn-sm saved-gallery-back-btn';
+  backButton.dataset.galleryBack = '1';
+  backButton.innerHTML = '<i class="bi bi-arrow-left" aria-hidden="true"></i><span>Tornar</span>';
+
+  const title = document.createElement('span');
+  title.className = 'saved-gallery-title';
+
+  toolbar.appendChild(backButton);
+  toolbar.appendChild(title);
+  grid.appendChild(toolbar);
+
+  if (state.activeGalleryId === MANUAL_GALLERY_ID) {
+    title.textContent = 'Galeria manual';
+    if (state.manualItems.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'logo-library-empty';
+      empty.textContent = 'No tens imatges manuals. Puja fitxers.';
+      grid.appendChild(empty);
+      return;
+    }
+    for (const item of state.manualItems) {
+      grid.appendChild(createImageCard(item, { manual: true }));
+    }
+    return;
+  }
+
+  const gallery = state.savedGalleries.find(
+    (entry) => String(entry?.id || '').trim() === String(state.activeGalleryId || '').trim()
+  );
+  if (!gallery) {
+    state.galleryListMode = 'list';
+    state.activeGalleryId = '';
+    renderGalleryListGrid();
+    return;
+  }
+
+  title.textContent = String(gallery.domain || 'Galeria');
+  if (!Array.isArray(gallery.items) || gallery.items.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'logo-library-empty';
+    empty.textContent = 'Aquesta galeria no te imatges';
+    grid.appendChild(empty);
+    return;
+  }
+
+  for (const item of gallery.items) {
+    grid.appendChild(createStoredGalleryCard(item));
+  }
+}
+
+function createGalleryListCard(entry) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'saved-gallery-entry';
+  card.dataset.galleryOpenId = String(entry.id || '').trim();
+
+  const title = document.createElement('span');
+  title.className = 'saved-gallery-entry-title';
+  title.textContent = String(entry.title || 'Galeria');
+
+  const subtitle = document.createElement('span');
+  subtitle.className = 'saved-gallery-entry-subtitle';
+  subtitle.textContent = String(entry.subtitle || '');
+
+  const count = document.createElement('span');
+  count.className = 'saved-gallery-entry-count';
+  count.textContent = `${Number(entry.count) || 0} imatges`;
+
+  card.appendChild(title);
+  card.appendChild(subtitle);
+  card.appendChild(count);
+  return card;
+}
+
+function createStoredGalleryCard(item) {
+  const card = document.createElement('div');
+  card.className = 'logo-library-item stored-gallery-item';
+
+  const thumbWrap = createThumbWrap(item);
+  const name = document.createElement('span');
+  name.className = 'logo-library-name';
+  name.textContent = String(item.name || 'Imatge');
+
+  card.appendChild(thumbWrap);
+  card.appendChild(name);
+
+  if (item?.sourceUrl) {
+    const highlightButton = document.createElement('button');
+    highlightButton.type = 'button';
+    highlightButton.className = 'logo-library-item-locate';
+    highlightButton.dataset.highlightSourceUrl = String(item.sourceUrl || '').trim();
+    highlightButton.setAttribute('aria-label', `Marcar en web ${item.name}`);
+    highlightButton.title = 'Marcar en web';
+    highlightButton.innerHTML = '<i class="bi bi-eye" aria-hidden="true"></i>';
+    card.appendChild(highlightButton);
+  }
+
+  return card;
+}
+
+function isItemSelected(item, options = {}) {
+  const itemId = String(item?.id || '').trim();
+  if (!itemId) {
+    return false;
+  }
+  if (options.manual) {
+    return state.selectedManualIds.has(itemId);
+  }
+  return state.selectedWebIds.has(itemId);
+}
+
+function toggleImageSelection(itemId, options = {}) {
+  const safeId = String(itemId || '').trim();
+  if (!safeId) {
+    return;
+  }
+  const selectedSet = options.manual ? state.selectedManualIds : state.selectedWebIds;
+  if (selectedSet.has(safeId)) {
+    selectedSet.delete(safeId);
+  } else {
+    selectedSet.add(safeId);
+  }
+  renderActiveLogoLibraryGrid();
+}
+
 function createImageCard(item, options = {}) {
+  const selected = isItemSelected(item, options);
   const card = document.createElement('div');
   card.className = 'logo-library-item';
+  card.classList.toggle('active', selected);
 
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'logo-library-item-select';
   button.setAttribute('role', 'option');
-  button.setAttribute('aria-selected', 'false');
+  button.setAttribute('aria-selected', selected ? 'true' : 'false');
+  button.dataset.imageId = String(item?.id || '');
+  button.dataset.imageManual = options.manual ? '1' : '0';
   button.title = item.name;
 
   const thumbWrap = createThumbWrap(item, options);
@@ -413,9 +664,11 @@ function createThumbWrap(item, options = {}) {
   image.loading = 'lazy';
   wrap.appendChild(image);
 
-  const badge = createPixelBadge(item, options);
-  if (badge) {
-    wrap.appendChild(badge);
+  if (!options.hideBadge) {
+    const badge = createPixelBadge(item, options);
+    if (badge) {
+      wrap.appendChild(badge);
+    }
   }
   return wrap;
 }
@@ -433,11 +686,11 @@ function createWebSizeLegend() {
     },
     {
       tone: 'match',
-      text: 'Verde: coincide con original (prefijado o sin forzar)'
+      text: 'Verde: tamaño de imagen y web igual'
     },
     {
       tone: 'mismatch',
-      text: 'Rojo: tamaño prefijado y distinto'
+      text: 'Rojo: imagen mayor que tamaño web'
     }
   ];
 
@@ -482,45 +735,36 @@ function createPixelBadge(item, options = {}) {
     return badge;
   }
 
-  if (!hasHtml) {
+  if (!hasHtml || htmlResponsive || !htmlFixed || htmlUnconstrained) {
     badge.textContent = `${originalLabel}px`;
     return badge;
   }
 
   const matchesOriginal = safeHtmlWidth === safeWidth && safeHtmlHeight === safeHeight;
-  if (htmlFixed) {
-    if (matchesOriginal) {
-      badge.classList.add('match');
-      badge.textContent = `${originalLabel}px`;
-      return badge;
-    }
-    const htmlLabel = `${safeHtmlWidth}x${safeHtmlHeight}`;
-    badge.classList.add('mismatch', 'two-lines');
-    const line1 = document.createElement('span');
-    line1.className = 'logo-library-pixels-line';
-    line1.innerHTML = `<i class="bi bi-globe2" aria-hidden="true"></i><span>${htmlLabel}px</span>`;
-
-    const line2 = document.createElement('span');
-    line2.className = 'logo-library-pixels-line';
-    line2.innerHTML = `<i class="bi bi-file-earmark-image" aria-hidden="true"></i><span>${originalLabel}px</span>`;
-
-    badge.appendChild(line1);
-    badge.appendChild(line2);
-    return badge;
-  }
-
-  if (htmlResponsive) {
-    badge.textContent = `${originalLabel}px`;
-    return badge;
-  }
-
-  if (htmlUnconstrained && matchesOriginal) {
+  if (matchesOriginal) {
     badge.classList.add('match');
     badge.textContent = `${originalLabel}px`;
     return badge;
   }
 
-  badge.textContent = `${originalLabel}px`;
+  const imageIsBiggerThanWeb = safeWidth > safeHtmlWidth || safeHeight > safeHtmlHeight;
+  if (!imageIsBiggerThanWeb) {
+    badge.textContent = `${originalLabel}px`;
+    return badge;
+  }
+
+  const htmlLabel = `${safeHtmlWidth}x${safeHtmlHeight}`;
+  badge.classList.add('mismatch', 'two-lines');
+  const line1 = document.createElement('span');
+  line1.className = 'logo-library-pixels-line';
+  line1.innerHTML = `<i class="bi bi-globe2" aria-hidden="true"></i><span>${htmlLabel}px</span>`;
+
+  const line2 = document.createElement('span');
+  line2.className = 'logo-library-pixels-line';
+  line2.innerHTML = `<i class="bi bi-file-earmark-image" aria-hidden="true"></i><span>${originalLabel}px</span>`;
+
+  badge.appendChild(line1);
+  badge.appendChild(line2);
   return badge;
 }
 
@@ -540,6 +784,7 @@ async function resolveActiveTabContext() {
 async function loadWebGallery() {
   if (!state.activeTabId || !state.activeTabUrl) {
     state.webItems = [];
+    state.selectedWebIds = new Set();
     renderActiveLogoLibraryGrid();
     return;
   }
@@ -567,6 +812,7 @@ async function loadWebGallery() {
         id: `web-${Date.now()}-${index}`,
         name: extractImageFileNameFromUrl(sourceUrl, index),
         dataUrl: asset.dataUrl,
+        fileSize: Math.max(0, Number(asset.fileSize) || 0),
         width: asset.width,
         height: asset.height,
         htmlWidth: Math.max(0, Number(candidate.htmlWidth) || 0),
@@ -582,17 +828,109 @@ async function loadWebGallery() {
     }
 
     state.webItems = normalized;
+    state.selectedWebIds = new Set(normalized.map((item) => String(item.id || '').trim()).filter(Boolean));
     if (normalized.length === 0) {
       showFeedbackToast('No s\'han trobat imatges web', 'error');
     }
   } catch (error) {
     console.error('Web gallery load failed', error);
     state.webItems = [];
+    state.selectedWebIds = new Set();
     showFeedbackToast('Error carregant imatges web', 'error');
   } finally {
     state.webLoading = false;
     renderActiveLogoLibraryGrid();
   }
+}
+
+async function saveSelectedWebImagesToDomainGallery() {
+  if (state.galleryView !== VIEW_WEB) {
+    return;
+  }
+
+  const selected = state.webItems.filter((item) => state.selectedWebIds.has(String(item.id || '').trim()));
+  if (selected.length === 0) {
+    showFeedbackToast('Selecciona imatges per desar', 'error');
+    return;
+  }
+
+  let domain = '';
+  let pageOrigin = '';
+  try {
+    const parsed = new URL(String(state.activeTabUrl || ''));
+    domain = String(parsed.hostname || '').trim().toLowerCase();
+    pageOrigin = String(parsed.origin || '').trim();
+  } catch {
+    domain = '';
+  }
+  if (!domain) {
+    showFeedbackToast('No s\'ha pogut detectar el domini', 'error');
+    return;
+  }
+
+  const galleryId = `domain:${domain}`;
+  const now = Date.now();
+  const existing = state.savedGalleries.find((entry) => String(entry?.id || '') === galleryId);
+  const mergedBySource = new Map();
+
+  if (existing && Array.isArray(existing.items)) {
+    for (const item of existing.items) {
+      const key = String(item?.sourceUrl || item?.id || '').trim();
+      if (!key) {
+        continue;
+      }
+      mergedBySource.set(key, { ...item });
+    }
+  }
+
+  let inserted = 0;
+  for (const item of selected) {
+    const sourceUrl = String(item.sourceUrl || '').trim();
+    const itemId = String(item.id || '').trim();
+    const mergeKey = sourceUrl || itemId;
+    if (!mergeKey) {
+      continue;
+    }
+    if (!mergedBySource.has(mergeKey)) {
+      inserted += 1;
+    }
+
+    mergedBySource.set(mergeKey, {
+      id: mergeKey,
+      name: sanitizeDisplayName(item.name || 'Imatge', 'Imatge'),
+      dataUrl: String(item.dataUrl || ''),
+      sourceUrl,
+      sourcePath: String(item.sourcePath || '').trim(),
+      fileSize: Math.max(0, Number(item.fileSize) || 0),
+      width: Math.max(0, Number(item.width) || 0),
+      height: Math.max(0, Number(item.height) || 0),
+      htmlWidth: Math.max(0, Number(item.htmlWidth) || 0),
+      htmlHeight: Math.max(0, Number(item.htmlHeight) || 0),
+      htmlFixed: Boolean(item.htmlFixed),
+      htmlResponsive: Boolean(item.htmlResponsive),
+      htmlUnconstrained: Boolean(item.htmlUnconstrained),
+      canHighlight: Boolean(item.canHighlight),
+      savedAt: now
+    });
+  }
+
+  const updatedGallery = {
+    id: galleryId,
+    domain,
+    pageOrigin,
+    updatedAt: now,
+    items: Array.from(mergedBySource.values()).sort((a, b) => Number(b.savedAt) - Number(a.savedAt))
+  };
+
+  const others = state.savedGalleries.filter((entry) => String(entry?.id || '') !== galleryId);
+  state.savedGalleries = [updatedGallery, ...others].sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+  await persistDomainGalleries();
+
+  state.galleryView = VIEW_LIBRARY;
+  state.galleryListMode = 'detail';
+  state.activeGalleryId = galleryId;
+  renderActiveLogoLibraryGrid();
+  showFeedbackToast(`${inserted} imatges desades a ${domain}`);
 }
 
 async function highlightSourceImageOnPage(sourceUrl) {
@@ -1240,6 +1578,7 @@ async function addManualImages(files) {
         id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         name: sanitizeManualName(file.name || 'Imatge manual'),
         dataUrl: asset.dataUrl,
+        fileSize: Math.max(0, Number(asset.fileSize) || 0),
         width: asset.width,
         height: asset.height,
         htmlWidth: 0,
@@ -1262,10 +1601,27 @@ async function addManualImages(files) {
     return;
   }
 
+  const previousSelected = new Set(state.selectedManualIds);
   state.manualItems = [...created, ...state.manualItems].slice(0, MAX_MANUAL_IMAGES);
+  const validIds = new Set(state.manualItems.map((item) => String(item.id || '').trim()).filter(Boolean));
+  const nextSelected = new Set();
+  for (const id of previousSelected) {
+    if (validIds.has(id)) {
+      nextSelected.add(id);
+    }
+  }
+  for (const item of created) {
+    const createdId = String(item.id || '').trim();
+    if (createdId && validIds.has(createdId)) {
+      nextSelected.add(createdId);
+    }
+  }
+  state.selectedManualIds = nextSelected;
   await persistManualLibrary();
 
-  state.galleryView = VIEW_MANUAL;
+  state.galleryView = VIEW_LIBRARY;
+  state.galleryListMode = 'detail';
+  state.activeGalleryId = MANUAL_GALLERY_ID;
   renderActiveLogoLibraryGrid();
 
   if (skipped > 0) {
@@ -1281,6 +1637,7 @@ async function removeManualImageById(id) {
   if (state.manualItems.length === before) {
     return;
   }
+  state.selectedManualIds.delete(String(id || '').trim());
   await persistManualLibrary();
   renderActiveLogoLibraryGrid();
   showFeedbackToast('Imatge eliminada');
@@ -1313,7 +1670,7 @@ async function normalizeBlobToAsset(blob) {
     URL.revokeObjectURL(objectUrl);
   }
 
-  return { dataUrl, width, height };
+  return { dataUrl, width, height, fileSize: Math.max(0, Number(blob.size) || 0) };
 }
 
 function loadImage(src) {
@@ -1338,10 +1695,101 @@ async function loadManualLibrary() {
   try {
     const stored = await chrome.storage.local.get({ [STORAGE_KEY_MANUAL_LIBRARY]: [] });
     state.manualItems = normalizeManualLibrary(stored[STORAGE_KEY_MANUAL_LIBRARY]);
+    state.selectedManualIds = new Set(
+      state.manualItems.map((item) => String(item.id || '').trim()).filter(Boolean)
+    );
   } catch (error) {
     console.error('Manual library load failed', error);
     state.manualItems = [];
+    state.selectedManualIds = new Set();
   }
+}
+
+async function loadDomainGalleries() {
+  try {
+    const stored = await chrome.storage.local.get({ [STORAGE_KEY_DOMAIN_GALLERIES]: [] });
+    state.savedGalleries = normalizeDomainGalleries(stored[STORAGE_KEY_DOMAIN_GALLERIES]);
+  } catch (error) {
+    console.error('Domain galleries load failed', error);
+    state.savedGalleries = [];
+  }
+}
+
+async function persistDomainGalleries() {
+  try {
+    await chrome.storage.local.set({
+      [STORAGE_KEY_DOMAIN_GALLERIES]: state.savedGalleries
+    });
+  } catch (error) {
+    console.error('Domain galleries save failed', error);
+    showFeedbackToast('No s\'han pogut desar les galeries', 'error');
+  }
+}
+
+function normalizeDomainGalleries(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const galleries = [];
+  const seen = new Set();
+
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const id = String(entry.id || '').trim();
+    const domain = String(entry.domain || '').trim().toLowerCase();
+    const pageOrigin = String(entry.pageOrigin || '').trim();
+    const updatedAt = Number(entry.updatedAt) || Date.now();
+    if (!id || !domain || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+
+    const itemsRaw = Array.isArray(entry.items) ? entry.items : [];
+    const items = [];
+    const seenItemIds = new Set();
+    for (const item of itemsRaw) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+      const itemId = String(item.id || item.sourceUrl || '').trim();
+      const dataUrl = String(item.dataUrl || '').trim();
+      if (!itemId || !dataUrl.startsWith('data:image/') || seenItemIds.has(itemId)) {
+        continue;
+      }
+      seenItemIds.add(itemId);
+      items.push({
+        id: itemId,
+        name: sanitizeDisplayName(item.name || 'Imatge', 'Imatge'),
+        dataUrl,
+        sourceUrl: String(item.sourceUrl || '').trim(),
+        sourcePath: String(item.sourcePath || '').trim(),
+        fileSize: Math.max(0, Number(item.fileSize) || 0),
+        width: Math.max(0, Number(item.width) || 0),
+        height: Math.max(0, Number(item.height) || 0),
+        htmlWidth: Math.max(0, Number(item.htmlWidth) || 0),
+        htmlHeight: Math.max(0, Number(item.htmlHeight) || 0),
+        htmlFixed: Boolean(item.htmlFixed),
+        htmlResponsive: Boolean(item.htmlResponsive),
+        htmlUnconstrained: Boolean(item.htmlUnconstrained),
+        canHighlight: Boolean(item.canHighlight),
+        savedAt: Number(item.savedAt) || updatedAt
+      });
+    }
+
+    items.sort((a, b) => Number(b.savedAt) - Number(a.savedAt));
+    galleries.push({
+      id,
+      domain,
+      pageOrigin,
+      updatedAt,
+      items
+    });
+  }
+
+  galleries.sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+  return galleries;
 }
 
 async function persistManualLibrary() {
@@ -1369,6 +1817,7 @@ function normalizeManualLibrary(raw) {
     const id = String(entry.id || '').trim();
     const dataUrl = String(entry.dataUrl || '').trim();
     const name = sanitizeManualName(entry.name || 'Imatge manual');
+    const fileSize = Math.max(0, Number(entry.fileSize) || 0);
     const width = Math.max(0, Number(entry.width) || 0);
     const height = Math.max(0, Number(entry.height) || 0);
     const htmlWidth = Math.max(0, Number(entry.htmlWidth) || 0);
@@ -1388,6 +1837,7 @@ function normalizeManualLibrary(raw) {
       id,
       name,
       dataUrl,
+      fileSize,
       width,
       height,
       htmlWidth,
