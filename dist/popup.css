@@ -1720,8 +1720,15 @@ body {
 }
 
 .logo-library-pixels-line {
-  display: block;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   white-space: nowrap;
+}
+
+.logo-library-pixels-line .bi {
+  font-size: 8px;
+  line-height: 1;
 }
 
 .logo-library-pixels.match {

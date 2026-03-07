@@ -392,11 +392,11 @@ function createWebSizeLegend() {
   const entries = [
     {
       tone: 'neutral',
-      text: 'Gris: tamaño no prefijado (responsive)'
+      text: 'Gris: tamaño no prefijado o deformable'
     },
     {
       tone: 'match',
-      text: 'Verde: tamaño prefijado y coincide'
+      text: 'Verde: coincide con original (prefijado o sin forzar)'
     },
     {
       tone: 'mismatch',
@@ -430,6 +430,8 @@ function createPixelBadge(item, options = {}) {
   const safeHtmlWidth = Number.isFinite(Number(item?.htmlWidth)) ? Math.round(Number(item.htmlWidth)) : 0;
   const safeHtmlHeight = Number.isFinite(Number(item?.htmlHeight)) ? Math.round(Number(item.htmlHeight)) : 0;
   const htmlFixed = Boolean(item?.htmlFixed);
+  const htmlResponsive = Boolean(item?.htmlResponsive);
+  const htmlUnconstrained = Boolean(item?.htmlUnconstrained);
   const isManual = Boolean(options.manual);
 
   const hasOriginal = safeWidth > 0 && safeHeight > 0;
@@ -438,13 +440,7 @@ function createPixelBadge(item, options = {}) {
 
   const badge = document.createElement('span');
   badge.className = 'logo-library-pixels';
-  if (isManual || !hasOriginal || !htmlFixed) {
-    badge.textContent = `${originalLabel}px`;
-    return badge;
-  }
-
-  if (hasHtml && safeHtmlWidth === safeWidth && safeHtmlHeight === safeHeight) {
-    badge.classList.add('match');
+  if (isManual || !hasOriginal) {
     badge.textContent = `${originalLabel}px`;
     return badge;
   }
@@ -454,18 +450,40 @@ function createPixelBadge(item, options = {}) {
     return badge;
   }
 
-  const htmlLabel = `${safeHtmlWidth}x${safeHtmlHeight}`;
-  badge.classList.add('mismatch', 'two-lines');
-  const line1 = document.createElement('span');
-  line1.className = 'logo-library-pixels-line';
-  line1.textContent = `Web ${htmlLabel}`;
+  const matchesOriginal = safeHtmlWidth === safeWidth && safeHtmlHeight === safeHeight;
+  if (htmlFixed) {
+    if (matchesOriginal) {
+      badge.classList.add('match');
+      badge.textContent = `${originalLabel}px`;
+      return badge;
+    }
+    const htmlLabel = `${safeHtmlWidth}x${safeHtmlHeight}`;
+    badge.classList.add('mismatch', 'two-lines');
+    const line1 = document.createElement('span');
+    line1.className = 'logo-library-pixels-line';
+    line1.innerHTML = `<i class="bi bi-globe2" aria-hidden="true"></i><span>${htmlLabel}px</span>`;
 
-  const line2 = document.createElement('span');
-  line2.className = 'logo-library-pixels-line';
-  line2.textContent = `Fichero ${originalLabel}px`;
+    const line2 = document.createElement('span');
+    line2.className = 'logo-library-pixels-line';
+    line2.innerHTML = `<i class="bi bi-file-earmark-image" aria-hidden="true"></i><span>${originalLabel}px</span>`;
 
-  badge.appendChild(line1);
-  badge.appendChild(line2);
+    badge.appendChild(line1);
+    badge.appendChild(line2);
+    return badge;
+  }
+
+  if (htmlResponsive) {
+    badge.textContent = `${originalLabel}px`;
+    return badge;
+  }
+
+  if (htmlUnconstrained && matchesOriginal) {
+    badge.classList.add('match');
+    badge.textContent = `${originalLabel}px`;
+    return badge;
+  }
+
+  badge.textContent = `${originalLabel}px`;
   return badge;
 }
 
@@ -517,6 +535,8 @@ async function loadWebGallery() {
         htmlWidth: Math.max(0, Number(candidate.htmlWidth) || 0),
         htmlHeight: Math.max(0, Number(candidate.htmlHeight) || 0),
         htmlFixed: Boolean(candidate.htmlFixed),
+        htmlResponsive: Boolean(candidate.htmlResponsive),
+        htmlUnconstrained: Boolean(candidate.htmlUnconstrained),
         sourceUrl,
         sourcePath: extractSourcePathFromUrl(sourceUrl)
       });
@@ -553,7 +573,6 @@ async function collectWebImageCandidates(tabId, tabUrl) {
         }
         return Math.round(numeric);
       };
-      const area = (entry) => entry.htmlWidth * entry.htmlHeight;
       const classifyLength = (value) => {
         const raw = String(value || '').trim().toLowerCase();
         if (!raw || raw === 'auto' || raw === 'initial' || raw === 'inherit') {
@@ -589,47 +608,78 @@ async function collectWebImageCandidates(tabId, tabUrl) {
           responsive: styleWidth.responsive || styleHeight.responsive
         };
       };
-      const resolveFixedSizing = (node) => {
+      const resolveSizingState = (node) => {
         let current = node instanceof Element ? node : null;
+        let fixedFound = false;
+        let responsiveFound = false;
 
         for (let depth = 0; current && depth <= 4; depth += 1) {
           const hints = readElementSizingHints(current);
-          if (hints.fixed) {
-            return true;
-          }
+          fixedFound = fixedFound || hints.fixed;
+          responsiveFound = responsiveFound || hints.responsive;
           current = current.parentElement;
         }
 
-        return false;
-      };
-
-      const upsert = (resolved, htmlWidth = 0, htmlHeight = 0, htmlFixed = false) => {
-        const candidate = {
-          url: resolved,
-          htmlWidth: clampDimension(htmlWidth),
-          htmlHeight: clampDimension(htmlHeight),
-          htmlFixed: Boolean(htmlFixed)
+        const fixed = fixedFound && !responsiveFound;
+        return {
+          fixed,
+          responsive: responsiveFound,
+          unconstrained: !fixedFound && !responsiveFound
         };
-        const existing = found.get(resolved);
+      };
+      const createMetric = (width, height) => ({
+        width,
+        height,
+        area: width * height,
+        perimeter: width + height
+      });
+      const pickBetterMetric = (current, incoming) => {
+        if (!current) {
+          return incoming;
+        }
+        if (incoming.area > current.area) {
+          return incoming;
+        }
+        if (incoming.area < current.area) {
+          return current;
+        }
+        if (incoming.perimeter > current.perimeter) {
+          return incoming;
+        }
+        return current;
+      };
+      const upsert = (
+        resolved,
+        dimensions = { width: 0, height: 0, fixed: false, responsive: false, unconstrained: false }
+      ) => {
+        const width = clampDimension(dimensions.width);
+        const height = clampDimension(dimensions.height);
+        const fixed = Boolean(dimensions.fixed);
+        const responsive = Boolean(dimensions.responsive);
+        const unconstrained = Boolean(dimensions.unconstrained);
+
+        let existing = found.get(resolved);
         if (!existing) {
-          found.set(resolved, candidate);
-          return;
+          existing = {
+            url: resolved,
+            hasFixed: false,
+            hasResponsive: false,
+            hasUnconstrained: false,
+            bestFixed: null,
+            bestAny: null
+          };
+          found.set(resolved, existing);
         }
-        const candidateArea = area(candidate);
-        const existingArea = area(existing);
-        if (candidateArea > existingArea) {
-          found.set(resolved, candidate);
-          return;
-        }
-        if (candidateArea === existingArea) {
-          if (candidate.htmlFixed && !existing.htmlFixed) {
-            found.set(resolved, candidate);
-            return;
-          }
-          const candidatePerimeter = candidate.htmlWidth + candidate.htmlHeight;
-          const existingPerimeter = existing.htmlWidth + existing.htmlHeight;
-          if (candidatePerimeter > existingPerimeter) {
-            found.set(resolved, candidate);
+
+        existing.hasFixed = existing.hasFixed || fixed;
+        existing.hasResponsive = existing.hasResponsive || responsive;
+        existing.hasUnconstrained = existing.hasUnconstrained || unconstrained;
+
+        if (width > 0 && height > 0) {
+          const metric = createMetric(width, height);
+          existing.bestAny = pickBetterMetric(existing.bestAny, metric);
+          if (fixed) {
+            existing.bestFixed = pickBetterMetric(existing.bestFixed, metric);
           }
         }
       };
@@ -653,7 +703,7 @@ async function collectWebImageCandidates(tabId, tabUrl) {
         try {
           const resolved = new URL(raw, base).href;
           if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
-            upsert(resolved, dimensions.width, dimensions.height, dimensions.fixed);
+            upsert(resolved, dimensions);
           }
         } catch {
           // ignore malformed url
@@ -671,6 +721,17 @@ async function collectWebImageCandidates(tabId, tabUrl) {
           pushUrl(candidate, dimensions);
         }
       };
+      const toResultEntry = (entry) => {
+        const preferred = entry.bestFixed || entry.bestAny;
+        return {
+          url: entry.url,
+          htmlWidth: preferred ? preferred.width : 0,
+          htmlHeight: preferred ? preferred.height : 0,
+          htmlFixed: entry.hasFixed && !entry.hasResponsive,
+          htmlResponsive: entry.hasResponsive,
+          htmlUnconstrained: entry.hasUnconstrained && !entry.hasFixed && !entry.hasResponsive
+        };
+      };
 
       const metadataNodes = document.querySelectorAll(
         'meta[property="og:image"],meta[name="twitter:image"],link[rel~="icon"],link[rel="apple-touch-icon"]'
@@ -682,9 +743,12 @@ async function collectWebImageCandidates(tabId, tabUrl) {
 
       const imageNodes = document.querySelectorAll('img');
       for (const node of imageNodes) {
+        const sizing = resolveSizingState(node);
         const dimensions = {
           ...getRectSize(node),
-          fixed: resolveFixedSizing(node)
+          fixed: sizing.fixed,
+          responsive: sizing.responsive,
+          unconstrained: sizing.unconstrained
         };
         pushUrl(node.currentSrc, dimensions);
         pushUrl(node.getAttribute('src'), dimensions);
@@ -694,9 +758,12 @@ async function collectWebImageCandidates(tabId, tabUrl) {
       const sourceNodes = document.querySelectorAll('source');
       for (const node of sourceNodes) {
         const parent = node.closest('picture') || node.parentElement;
+        const sizing = resolveSizingState(parent || node);
         const dimensions = {
           ...getRectSize(parent),
-          fixed: resolveFixedSizing(parent || node)
+          fixed: sizing.fixed,
+          responsive: sizing.responsive,
+          unconstrained: sizing.unconstrained
         };
         pushUrl(node.getAttribute('src'), dimensions);
         pushSrcSet(node.getAttribute('srcset'), dimensions);
@@ -704,9 +771,12 @@ async function collectWebImageCandidates(tabId, tabUrl) {
 
       const inlineBackground = document.querySelectorAll('[style*="background-image"]');
       for (const node of inlineBackground) {
+        const sizing = resolveSizingState(node);
         const dimensions = {
           ...getRectSize(node),
-          fixed: resolveFixedSizing(node)
+          fixed: sizing.fixed,
+          responsive: sizing.responsive,
+          unconstrained: sizing.unconstrained
         };
         const style = String(node.getAttribute('style') || '');
         const regex = /url\((['"]?)(.*?)\1\)/giu;
@@ -716,7 +786,7 @@ async function collectWebImageCandidates(tabId, tabUrl) {
         }
       }
 
-      return Array.from(found.values());
+      return Array.from(found.values(), (entry) => toResultEntry(entry));
     }
   });
 
@@ -726,7 +796,9 @@ async function collectWebImageCandidates(tabId, tabUrl) {
       url: String(entry?.url || '').trim(),
       htmlWidth: Math.max(0, Math.round(Number(entry?.htmlWidth) || 0)),
       htmlHeight: Math.max(0, Math.round(Number(entry?.htmlHeight) || 0)),
-      htmlFixed: Boolean(entry?.htmlFixed)
+      htmlFixed: Boolean(entry?.htmlFixed),
+      htmlResponsive: Boolean(entry?.htmlResponsive),
+      htmlUnconstrained: Boolean(entry?.htmlUnconstrained)
     }))
     .filter((entry) => Boolean(entry.url));
 
@@ -735,7 +807,9 @@ async function collectWebImageCandidates(tabId, tabUrl) {
       url: chrome.runtime.getURL(`/_favicon/?pageUrl=${encodeURIComponent(tabUrl)}&size=${size}`),
       htmlWidth: 0,
       htmlHeight: 0,
-      htmlFixed: false
+      htmlFixed: false,
+      htmlResponsive: false,
+      htmlUnconstrained: false
     })
   );
 
@@ -751,7 +825,9 @@ async function collectWebImageCandidates(tabId, tabUrl) {
       url: safeUrl,
       htmlWidth: Math.max(0, Number(entry?.htmlWidth) || 0),
       htmlHeight: Math.max(0, Number(entry?.htmlHeight) || 0),
-      htmlFixed: Boolean(entry?.htmlFixed)
+      htmlFixed: Boolean(entry?.htmlFixed),
+      htmlResponsive: Boolean(entry?.htmlResponsive),
+      htmlUnconstrained: Boolean(entry?.htmlUnconstrained)
     };
     const existing = uniqueByUrl.get(safeUrl);
     if (!existing) {
@@ -761,11 +837,33 @@ async function collectWebImageCandidates(tabId, tabUrl) {
     const candidateArea = candidate.htmlWidth * candidate.htmlHeight;
     const existingArea = existing.htmlWidth * existing.htmlHeight;
     if (candidateArea > existingArea) {
-      uniqueByUrl.set(safeUrl, candidate);
+      const next = { ...candidate };
+      next.htmlResponsive = existing.htmlResponsive || candidate.htmlResponsive;
+      next.htmlUnconstrained = existing.htmlUnconstrained || candidate.htmlUnconstrained;
+      next.htmlFixed = Boolean(next.htmlFixed) && !next.htmlResponsive;
+      if (next.htmlResponsive || next.htmlFixed) {
+        next.htmlUnconstrained = false;
+      }
+      uniqueByUrl.set(safeUrl, next);
       continue;
     }
     if (candidateArea === existingArea && candidate.htmlFixed && !existing.htmlFixed) {
-      uniqueByUrl.set(safeUrl, candidate);
+      const next = { ...candidate };
+      next.htmlResponsive = existing.htmlResponsive || candidate.htmlResponsive;
+      next.htmlUnconstrained = existing.htmlUnconstrained || candidate.htmlUnconstrained;
+      next.htmlFixed = Boolean(next.htmlFixed) && !next.htmlResponsive;
+      if (next.htmlResponsive || next.htmlFixed) {
+        next.htmlUnconstrained = false;
+      }
+      uniqueByUrl.set(safeUrl, next);
+      continue;
+    }
+
+    existing.htmlResponsive = existing.htmlResponsive || candidate.htmlResponsive;
+    existing.htmlUnconstrained = existing.htmlUnconstrained || candidate.htmlUnconstrained;
+    existing.htmlFixed = Boolean(existing.htmlFixed) && !existing.htmlResponsive;
+    if (existing.htmlResponsive || existing.htmlFixed) {
+      existing.htmlUnconstrained = false;
     }
   }
 
@@ -810,6 +908,8 @@ async function addManualImages(files) {
         htmlWidth: 0,
         htmlHeight: 0,
         htmlFixed: false,
+        htmlResponsive: false,
+        htmlUnconstrained: false,
         sourceUrl: '',
         sourcePath: String(file.webkitRelativePath || file.name || '').trim(),
         createdAt: Date.now() + created.length
@@ -936,6 +1036,8 @@ function normalizeManualLibrary(raw) {
     const htmlWidth = Math.max(0, Number(entry.htmlWidth) || 0);
     const htmlHeight = Math.max(0, Number(entry.htmlHeight) || 0);
     const htmlFixed = Boolean(entry.htmlFixed);
+    const htmlResponsive = Boolean(entry.htmlResponsive);
+    const htmlUnconstrained = Boolean(entry.htmlUnconstrained);
     const sourceUrl = String(entry.sourceUrl || '').trim();
     const sourcePath = String(entry.sourcePath || '').trim();
     const createdAt = Number(entry.createdAt) || Date.now();
@@ -952,6 +1054,8 @@ function normalizeManualLibrary(raw) {
       htmlWidth,
       htmlHeight,
       htmlFixed,
+      htmlResponsive,
+      htmlUnconstrained,
       sourceUrl,
       sourcePath,
       createdAt
