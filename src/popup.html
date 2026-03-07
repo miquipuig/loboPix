@@ -46,6 +46,37 @@
               <span id="logoUsePageBtnIcon" class="logo-library-action-icon" aria-hidden="true"><i class="bi bi-images" aria-hidden="true"></i></span>
               <span id="logoUsePageBtnText">Veure manuals</span>
             </button>
+            <div class="logo-library-layout-slider-wrap" role="group" aria-label="Tamano de miniaturas">
+              <span class="logo-library-layout-edge-icon" aria-hidden="true" title="Miniatura gran">
+                <i class="bi bi-square-fill" aria-hidden="true"></i>
+              </span>
+              <input
+                id="thumbColsSlider"
+                class="logo-library-layout-slider"
+                type="range"
+                min="1"
+                max="4"
+                step="1"
+                value="4"
+                list="thumbColsSliderMarks"
+                aria-label="Columnas por fila"
+              />
+              <span class="logo-library-layout-edge-icon" aria-hidden="true" title="Miniatura petita">
+                <i class="bi bi-grid-3x3-gap-fill" aria-hidden="true"></i>
+              </span>
+              <div class="logo-library-layout-slider-dots" aria-hidden="true">
+                <span class="logo-library-layout-slider-dot"></span>
+                <span class="logo-library-layout-slider-dot"></span>
+                <span class="logo-library-layout-slider-dot"></span>
+                <span class="logo-library-layout-slider-dot"></span>
+              </div>
+              <datalist id="thumbColsSliderMarks">
+                <option value="1"></option>
+                <option value="2"></option>
+                <option value="3"></option>
+                <option value="4"></option>
+              </datalist>
+            </div>
             <input id="logoUploadInput" class="hidden" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif,image/bmp,image/x-icon" />
           </div>
           <div id="logoLibraryDropHint" class="logo-library-drop-hint hidden" aria-hidden="true">

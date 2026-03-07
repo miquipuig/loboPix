@@ -3,7 +3,6 @@ const VIEW_MANUAL = 'manual';
 const STORAGE_KEY_MANUAL_LIBRARY = 'manualImageLibrary';
 const MAX_MANUAL_IMAGES = 80;
 const MAX_WEB_IMAGES = 80;
-const MAX_IMAGE_SIDE = 720;
 
 const elements = {
   popupRoot: document.getElementById('popupRoot'),
@@ -15,6 +14,7 @@ const elements = {
   logoUsePageBtn: document.getElementById('logoUsePageBtn'),
   logoUsePageBtnIcon: document.getElementById('logoUsePageBtnIcon'),
   logoUsePageBtnText: document.getElementById('logoUsePageBtnText'),
+  thumbColsSlider: document.getElementById('thumbColsSlider'),
   logoUploadInput: document.getElementById('logoUploadInput'),
   logoLibraryDropHint: document.getElementById('logoLibraryDropHint'),
   logoLibraryGrid: document.getElementById('logoLibraryGrid'),
@@ -37,6 +37,7 @@ const state = {
   webItems: [],
   webLoading: false,
   manualItems: [],
+  thumbnailColumns: 4,
   toastTimer: null,
   fileDragDepth: 0,
   fileDragActive: false
@@ -46,6 +47,7 @@ void init();
 
 async function init() {
   bindEvents();
+  setThumbnailColumns(4);
   renderVersion();
   await loadManualLibrary();
   await resolveActiveTabContext();
@@ -79,6 +81,15 @@ function bindEvents() {
     renderActiveLogoLibraryGrid();
     void loadWebGallery();
   });
+
+  if (elements.thumbColsSlider instanceof HTMLInputElement) {
+    const onColumnsChange = () => {
+      setThumbnailColumns(Number(elements.thumbColsSlider.value));
+      renderActiveLogoLibraryGrid();
+    };
+    elements.thumbColsSlider.addEventListener('input', onColumnsChange);
+    elements.thumbColsSlider.addEventListener('change', onColumnsChange);
+  }
 
   elements.logoUploadBtn.addEventListener('click', () => {
     elements.logoUploadInput.click();
@@ -232,6 +243,21 @@ function updateToggleButtonCopy() {
     : '<i class="bi bi-globe2" aria-hidden="true"></i>';
 }
 
+function setThumbnailColumns(columns) {
+  const safe = columns === 1 || columns === 2 || columns === 3 ? columns : 4;
+  state.thumbnailColumns = safe;
+  elements.logoLibraryGrid.style.setProperty('--gallery-cols', String(safe));
+  elements.logoLibraryGrid.dataset.cols = String(safe);
+  syncThumbnailColumnSlider();
+}
+
+function syncThumbnailColumnSlider() {
+  if (!(elements.thumbColsSlider instanceof HTMLInputElement)) {
+    return;
+  }
+  elements.thumbColsSlider.value = String(state.thumbnailColumns);
+}
+
 function renderActiveLogoLibraryGrid() {
   updateGalleryHeader();
   updateToggleButtonCopy();
@@ -281,6 +307,7 @@ function renderWebGrid() {
     return;
   }
 
+  grid.appendChild(createWebSizeLegend());
   for (const item of state.webItems) {
     grid.appendChild(createImageCard(item));
   }
@@ -315,7 +342,7 @@ function createImageCard(item, options = {}) {
   button.setAttribute('aria-selected', 'false');
   button.title = item.name;
 
-  const thumbWrap = createThumbWrap(item);
+  const thumbWrap = createThumbWrap(item, options);
   const name = document.createElement('span');
   name.className = 'logo-library-name';
   name.textContent = item.name;
@@ -338,7 +365,7 @@ function createImageCard(item, options = {}) {
   return card;
 }
 
-function createThumbWrap(item) {
+function createThumbWrap(item, options = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'logo-library-thumb-wrap';
 
@@ -349,22 +376,96 @@ function createThumbWrap(item) {
   image.loading = 'lazy';
   wrap.appendChild(image);
 
-  const badge = createPixelBadge(item.width, item.height);
+  const badge = createPixelBadge(item, options);
   if (badge) {
     wrap.appendChild(badge);
   }
   return wrap;
 }
 
-function createPixelBadge(width, height) {
-  const safeWidth = Number.isFinite(Number(width)) ? Math.round(Number(width)) : 0;
-  const safeHeight = Number.isFinite(Number(height)) ? Math.round(Number(height)) : 0;
-  if (safeWidth <= 0 || safeHeight <= 0) {
-    return null;
+function createWebSizeLegend() {
+  const legend = document.createElement('div');
+  legend.className = 'logo-library-size-legend';
+  legend.setAttribute('role', 'note');
+  legend.setAttribute('aria-label', 'Leyenda de tamaños');
+
+  const entries = [
+    {
+      tone: 'neutral',
+      text: 'Gris: tamaño no prefijado (responsive)'
+    },
+    {
+      tone: 'match',
+      text: 'Verde: tamaño prefijado y coincide'
+    },
+    {
+      tone: 'mismatch',
+      text: 'Rojo: tamaño prefijado y distinto'
+    }
+  ];
+
+  for (const entry of entries) {
+    const item = document.createElement('span');
+    item.className = `logo-library-size-legend-item ${entry.tone}`;
+
+    const dot = document.createElement('span');
+    dot.className = 'logo-library-size-legend-dot';
+    dot.setAttribute('aria-hidden', 'true');
+
+    const label = document.createElement('span');
+    label.className = 'logo-library-size-legend-label';
+    label.textContent = entry.text;
+
+    item.appendChild(dot);
+    item.appendChild(label);
+    legend.appendChild(item);
   }
+
+  return legend;
+}
+
+function createPixelBadge(item, options = {}) {
+  const safeWidth = Number.isFinite(Number(item?.width)) ? Math.round(Number(item.width)) : 0;
+  const safeHeight = Number.isFinite(Number(item?.height)) ? Math.round(Number(item.height)) : 0;
+  const safeHtmlWidth = Number.isFinite(Number(item?.htmlWidth)) ? Math.round(Number(item.htmlWidth)) : 0;
+  const safeHtmlHeight = Number.isFinite(Number(item?.htmlHeight)) ? Math.round(Number(item.htmlHeight)) : 0;
+  const htmlFixed = Boolean(item?.htmlFixed);
+  const isManual = Boolean(options.manual);
+
+  const hasOriginal = safeWidth > 0 && safeHeight > 0;
+  const hasHtml = safeHtmlWidth > 0 && safeHtmlHeight > 0;
+  const originalLabel = hasOriginal ? `${safeWidth}x${safeHeight}` : '?x?';
+
   const badge = document.createElement('span');
   badge.className = 'logo-library-pixels';
-  badge.textContent = `${safeWidth}x${safeHeight}px`;
+  if (isManual || !hasOriginal || !htmlFixed) {
+    badge.textContent = `${originalLabel}px`;
+    return badge;
+  }
+
+  if (hasHtml && safeHtmlWidth === safeWidth && safeHtmlHeight === safeHeight) {
+    badge.classList.add('match');
+    badge.textContent = `${originalLabel}px`;
+    return badge;
+  }
+
+  if (!hasHtml) {
+    badge.textContent = `${originalLabel}px`;
+    return badge;
+  }
+
+  const htmlLabel = `${safeHtmlWidth}x${safeHtmlHeight}`;
+  badge.classList.add('mismatch', 'two-lines');
+  const line1 = document.createElement('span');
+  line1.className = 'logo-library-pixels-line';
+  line1.textContent = `Web ${htmlLabel}`;
+
+  const line2 = document.createElement('span');
+  line2.className = 'logo-library-pixels-line';
+  line2.textContent = `Fichero ${originalLabel}px`;
+
+  badge.appendChild(line1);
+  badge.appendChild(line2);
   return badge;
 }
 
@@ -397,21 +498,27 @@ async function loadWebGallery() {
     const seenData = new Set();
     let index = 1;
 
-    for (const url of candidates) {
+    for (const candidate of candidates) {
       if (normalized.length >= MAX_WEB_IMAGES) {
         break;
       }
-      const asset = await normalizeRemoteImage(url);
+      const asset = await normalizeRemoteImage(candidate.url);
       if (!asset || !asset.dataUrl || seenData.has(asset.dataUrl)) {
         continue;
       }
+      const sourceUrl = String(candidate.url || '').trim();
       seenData.add(asset.dataUrl);
       normalized.push({
         id: `web-${Date.now()}-${index}`,
-        name: `${safeHostLabel(state.activeTabUrl)} · imatge ${index}`,
+        name: extractImageFileNameFromUrl(sourceUrl, index),
         dataUrl: asset.dataUrl,
         width: asset.width,
-        height: asset.height
+        height: asset.height,
+        htmlWidth: Math.max(0, Number(candidate.htmlWidth) || 0),
+        htmlHeight: Math.max(0, Number(candidate.htmlHeight) || 0),
+        htmlFixed: Boolean(candidate.htmlFixed),
+        sourceUrl,
+        sourcePath: extractSourcePathFromUrl(sourceUrl)
       });
       index += 1;
     }
@@ -434,10 +541,111 @@ async function collectWebImageCandidates(tabId, tabUrl) {
   const result = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
-      const found = new Set();
+      const found = new Map();
       const base = document.baseURI || location.href;
+      const ABSOLUTE_LENGTH_RE = /^-?\d+(\.\d+)?(?:px|pt|pc|in|cm|mm|q|rem|em|ch|ex)$/iu;
+      const RESPONSIVE_LENGTH_RE =
+        /%|vw|vh|vmin|vmax|svw|svh|lvw|lvh|dvw|dvh|calc\(|min\(|max\(|clamp\(/iu;
+      const clampDimension = (value) => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric <= 0) {
+          return 0;
+        }
+        return Math.round(numeric);
+      };
+      const area = (entry) => entry.htmlWidth * entry.htmlHeight;
+      const classifyLength = (value) => {
+        const raw = String(value || '').trim().toLowerCase();
+        if (!raw || raw === 'auto' || raw === 'initial' || raw === 'inherit') {
+          return { fixed: false, responsive: false };
+        }
+        if (RESPONSIVE_LENGTH_RE.test(raw)) {
+          return { fixed: false, responsive: true };
+        }
+        if (ABSOLUTE_LENGTH_RE.test(raw) || /^-?\d+(\.\d+)?$/u.test(raw)) {
+          return { fixed: true, responsive: false };
+        }
+        return { fixed: false, responsive: false };
+      };
+      const readElementSizingHints = (node) => {
+        if (!(node instanceof Element)) {
+          return { fixed: false, responsive: false };
+        }
 
-      const pushUrl = (value) => {
+        const rawWidthAttr = String(node.getAttribute('width') || '').trim();
+        const rawHeightAttr = String(node.getAttribute('height') || '').trim();
+        const widthAttr = Number(rawWidthAttr);
+        const heightAttr = Number(rawHeightAttr);
+        const attrWidthFixed = Number.isFinite(widthAttr) && widthAttr > 0;
+        const attrHeightFixed = Number.isFinite(heightAttr) && heightAttr > 0;
+
+        const styleWidth = classifyLength(node.style?.width || '');
+        const styleHeight = classifyLength(node.style?.height || '');
+
+        const widthFixed = attrWidthFixed || styleWidth.fixed;
+        const heightFixed = attrHeightFixed || styleHeight.fixed;
+        return {
+          fixed: widthFixed && heightFixed,
+          responsive: styleWidth.responsive || styleHeight.responsive
+        };
+      };
+      const resolveFixedSizing = (node) => {
+        let current = node instanceof Element ? node : null;
+
+        for (let depth = 0; current && depth <= 4; depth += 1) {
+          const hints = readElementSizingHints(current);
+          if (hints.fixed) {
+            return true;
+          }
+          current = current.parentElement;
+        }
+
+        return false;
+      };
+
+      const upsert = (resolved, htmlWidth = 0, htmlHeight = 0, htmlFixed = false) => {
+        const candidate = {
+          url: resolved,
+          htmlWidth: clampDimension(htmlWidth),
+          htmlHeight: clampDimension(htmlHeight),
+          htmlFixed: Boolean(htmlFixed)
+        };
+        const existing = found.get(resolved);
+        if (!existing) {
+          found.set(resolved, candidate);
+          return;
+        }
+        const candidateArea = area(candidate);
+        const existingArea = area(existing);
+        if (candidateArea > existingArea) {
+          found.set(resolved, candidate);
+          return;
+        }
+        if (candidateArea === existingArea) {
+          if (candidate.htmlFixed && !existing.htmlFixed) {
+            found.set(resolved, candidate);
+            return;
+          }
+          const candidatePerimeter = candidate.htmlWidth + candidate.htmlHeight;
+          const existingPerimeter = existing.htmlWidth + existing.htmlHeight;
+          if (candidatePerimeter > existingPerimeter) {
+            found.set(resolved, candidate);
+          }
+        }
+      };
+
+      const getRectSize = (node) => {
+        if (!(node instanceof Element)) {
+          return { width: 0, height: 0 };
+        }
+        const rect = node.getBoundingClientRect();
+        return {
+          width: clampDimension(rect.width),
+          height: clampDimension(rect.height)
+        };
+      };
+
+      const pushUrl = (value, dimensions = { width: 0, height: 0 }) => {
         const raw = String(value || '').trim();
         if (!raw) {
           return;
@@ -445,14 +653,14 @@ async function collectWebImageCandidates(tabId, tabUrl) {
         try {
           const resolved = new URL(raw, base).href;
           if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
-            found.add(resolved);
+            upsert(resolved, dimensions.width, dimensions.height, dimensions.fixed);
           }
         } catch {
           // ignore malformed url
         }
       };
 
-      const pushSrcSet = (srcset) => {
+      const pushSrcSet = (srcset, dimensions = { width: 0, height: 0 }) => {
         const raw = String(srcset || '').trim();
         if (!raw) {
           return;
@@ -460,63 +668,108 @@ async function collectWebImageCandidates(tabId, tabUrl) {
         const entries = raw.split(',');
         for (const entry of entries) {
           const [candidate] = entry.trim().split(/\s+/u);
-          pushUrl(candidate);
+          pushUrl(candidate, dimensions);
         }
       };
 
-      const selectors = [
-        'meta[property="og:image"]',
-        'meta[name="twitter:image"]',
-        'link[rel~="icon"]',
-        'link[rel="apple-touch-icon"]',
-        'img[src]',
-        'source[src]',
-        'source[srcset]'
-      ];
+      const metadataNodes = document.querySelectorAll(
+        'meta[property="og:image"],meta[name="twitter:image"],link[rel~="icon"],link[rel="apple-touch-icon"]'
+      );
+      for (const node of metadataNodes) {
+        pushUrl(node.getAttribute('content'));
+        pushUrl(node.getAttribute('href'));
+      }
 
-      for (const selector of selectors) {
-        const nodes = document.querySelectorAll(selector);
-        for (const node of nodes) {
-          pushUrl(node.getAttribute('content'));
-          pushUrl(node.getAttribute('href'));
-          pushUrl(node.getAttribute('src'));
-          pushSrcSet(node.getAttribute('srcset'));
-        }
+      const imageNodes = document.querySelectorAll('img');
+      for (const node of imageNodes) {
+        const dimensions = {
+          ...getRectSize(node),
+          fixed: resolveFixedSizing(node)
+        };
+        pushUrl(node.currentSrc, dimensions);
+        pushUrl(node.getAttribute('src'), dimensions);
+        pushSrcSet(node.getAttribute('srcset'), dimensions);
+      }
+
+      const sourceNodes = document.querySelectorAll('source');
+      for (const node of sourceNodes) {
+        const parent = node.closest('picture') || node.parentElement;
+        const dimensions = {
+          ...getRectSize(parent),
+          fixed: resolveFixedSizing(parent || node)
+        };
+        pushUrl(node.getAttribute('src'), dimensions);
+        pushSrcSet(node.getAttribute('srcset'), dimensions);
       }
 
       const inlineBackground = document.querySelectorAll('[style*="background-image"]');
       for (const node of inlineBackground) {
+        const dimensions = {
+          ...getRectSize(node),
+          fixed: resolveFixedSizing(node)
+        };
         const style = String(node.getAttribute('style') || '');
         const regex = /url\((['"]?)(.*?)\1\)/giu;
         let match;
         while ((match = regex.exec(style)) !== null) {
-          pushUrl(match[2]);
+          pushUrl(match[2], dimensions);
         }
       }
 
-      return Array.from(found);
+      return Array.from(found.values());
     }
   });
 
-  const fromPage = Array.isArray(result?.[0]?.result) ? result[0].result : [];
+  const fromPageRaw = Array.isArray(result?.[0]?.result) ? result[0].result : [];
+  const fromPage = fromPageRaw
+    .map((entry) => ({
+      url: String(entry?.url || '').trim(),
+      htmlWidth: Math.max(0, Math.round(Number(entry?.htmlWidth) || 0)),
+      htmlHeight: Math.max(0, Math.round(Number(entry?.htmlHeight) || 0)),
+      htmlFixed: Boolean(entry?.htmlFixed)
+    }))
+    .filter((entry) => Boolean(entry.url));
+
   const favicons = [256, 128, 64].map((size) =>
-    chrome.runtime.getURL(`/_favicon/?pageUrl=${encodeURIComponent(tabUrl)}&size=${size}`)
+    ({
+      url: chrome.runtime.getURL(`/_favicon/?pageUrl=${encodeURIComponent(tabUrl)}&size=${size}`),
+      htmlWidth: 0,
+      htmlHeight: 0,
+      htmlFixed: false
+    })
   );
 
   const merged = [...fromPage, ...favicons];
-  const unique = [];
-  const seen = new Set();
+  const uniqueByUrl = new Map();
 
-  for (const url of merged) {
-    const safe = String(url || '').trim();
-    if (!safe || seen.has(safe)) {
+  for (const entry of merged) {
+    const safeUrl = String(entry?.url || '').trim();
+    if (!safeUrl) {
       continue;
     }
-    seen.add(safe);
-    unique.push(safe);
+    const candidate = {
+      url: safeUrl,
+      htmlWidth: Math.max(0, Number(entry?.htmlWidth) || 0),
+      htmlHeight: Math.max(0, Number(entry?.htmlHeight) || 0),
+      htmlFixed: Boolean(entry?.htmlFixed)
+    };
+    const existing = uniqueByUrl.get(safeUrl);
+    if (!existing) {
+      uniqueByUrl.set(safeUrl, candidate);
+      continue;
+    }
+    const candidateArea = candidate.htmlWidth * candidate.htmlHeight;
+    const existingArea = existing.htmlWidth * existing.htmlHeight;
+    if (candidateArea > existingArea) {
+      uniqueByUrl.set(safeUrl, candidate);
+      continue;
+    }
+    if (candidateArea === existingArea && candidate.htmlFixed && !existing.htmlFixed) {
+      uniqueByUrl.set(safeUrl, candidate);
+    }
   }
 
-  return unique;
+  return Array.from(uniqueByUrl.values());
 }
 
 async function normalizeRemoteImage(url) {
@@ -554,6 +807,11 @@ async function addManualImages(files) {
         dataUrl: asset.dataUrl,
         width: asset.width,
         height: asset.height,
+        htmlWidth: 0,
+        htmlHeight: 0,
+        htmlFixed: false,
+        sourceUrl: '',
+        sourcePath: String(file.webkitRelativePath || file.name || '').trim(),
         createdAt: Date.now() + created.length
       });
     } catch {
@@ -599,33 +857,25 @@ async function normalizeBlobToAsset(blob) {
     return null;
   }
 
+  const dataUrl = await blobToDataUrl(blob);
+  if (!dataUrl.startsWith('data:image/')) {
+    return null;
+  }
+
+  let width = 0;
+  let height = 0;
   const objectUrl = URL.createObjectURL(blob);
   try {
     const image = await loadImage(objectUrl);
-    const width = Math.max(1, Number(image.naturalWidth) || 1);
-    const height = Math.max(1, Number(image.naturalHeight) || 1);
-    const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(width, height));
-    const outputWidth = Math.max(1, Math.round(width * scale));
-    const outputHeight = Math.max(1, Math.round(height * scale));
-
-    const canvas = document.createElement('canvas');
-    canvas.width = outputWidth;
-    canvas.height = outputHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return null;
-    }
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(image, 0, 0, outputWidth, outputHeight);
-
-    return {
-      dataUrl: canvas.toDataURL('image/png'),
-      width: outputWidth,
-      height: outputHeight
-    };
+    width = Math.max(1, Number(image.naturalWidth) || 1);
+    height = Math.max(1, Number(image.naturalHeight) || 1);
+  } catch {
+    // Keep original bytes even if we cannot read dimensions for this format.
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+
+  return { dataUrl, width, height };
 }
 
 function loadImage(src) {
@@ -634,6 +884,15 @@ function loadImage(src) {
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error('image_load_failed'));
     image.src = src;
+  });
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('blob_to_data_url_failed'));
+    reader.readAsDataURL(blob);
   });
 }
 
@@ -674,12 +933,29 @@ function normalizeManualLibrary(raw) {
     const name = sanitizeManualName(entry.name || 'Imatge manual');
     const width = Math.max(0, Number(entry.width) || 0);
     const height = Math.max(0, Number(entry.height) || 0);
+    const htmlWidth = Math.max(0, Number(entry.htmlWidth) || 0);
+    const htmlHeight = Math.max(0, Number(entry.htmlHeight) || 0);
+    const htmlFixed = Boolean(entry.htmlFixed);
+    const sourceUrl = String(entry.sourceUrl || '').trim();
+    const sourcePath = String(entry.sourcePath || '').trim();
     const createdAt = Number(entry.createdAt) || Date.now();
     if (!id || !dataUrl.startsWith('data:image/') || seen.has(id)) {
       continue;
     }
     seen.add(id);
-    items.push({ id, name, dataUrl, width, height, createdAt });
+    items.push({
+      id,
+      name,
+      dataUrl,
+      width,
+      height,
+      htmlWidth,
+      htmlHeight,
+      htmlFixed,
+      sourceUrl,
+      sourcePath,
+      createdAt
+    });
   }
 
   items.sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
@@ -687,9 +963,14 @@ function normalizeManualLibrary(raw) {
 }
 
 function sanitizeManualName(name) {
+  return sanitizeDisplayName(name, 'Imatge manual');
+}
+
+function sanitizeDisplayName(name, fallback = 'Imatge') {
   const safe = String(name || '').trim();
   if (!safe) {
-    return 'Imatge manual';
+    const safeFallback = String(fallback || 'Imatge').trim();
+    return safeFallback || 'Imatge';
   }
   return safe.length > 80 ? `${safe.slice(0, 79)}...` : safe;
 }
@@ -720,11 +1001,36 @@ function showFeedbackToast(message, type = 'success') {
   }, 2200);
 }
 
-function safeHostLabel(rawUrl) {
+function extractImageFileNameFromUrl(rawUrl, fallbackIndex = 0) {
+  const fallback = `imagen-${Math.max(1, Number(fallbackIndex) || 1)}`;
   try {
-    return new URL(rawUrl).hostname.replace(/^www\./iu, '') || 'web';
+    const parsed = new URL(String(rawUrl || '').trim());
+    const segments = String(parsed.pathname || '')
+      .split('/')
+      .filter(Boolean);
+    let fileName = segments.length > 0 ? decodeURIComponent(segments[segments.length - 1]) : '';
+
+    if (!fileName || fileName === '_favicon') {
+      const size = String(parsed.searchParams.get('size') || '').trim();
+      fileName = size ? `favicon-${size}.png` : '';
+    }
+
+    if (!fileName) {
+      fileName = fallback;
+    }
+
+    return sanitizeDisplayName(fileName, fallback);
   } catch {
-    return 'web';
+    return sanitizeDisplayName(fallback, fallback);
+  }
+}
+
+function extractSourcePathFromUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || '').trim());
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return String(rawUrl || '').trim();
   }
 }
 
