@@ -1,5 +1,8 @@
 {
   "appDescription": {
     "message": "Browse images from the active website and manage a manual image library."
+  },
+  "aboutSignaturePrefix": {
+    "message": "an application by"
   }
 }

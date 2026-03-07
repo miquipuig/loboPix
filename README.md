@@ -1,4 +1,4 @@
-# loboTinify
+# lobopix
 
 Extensio de Chrome (Manifest V3) centrada exclusivament en galeria d'imatges.
 

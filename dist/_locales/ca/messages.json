@@ -1,5 +1,8 @@
 {
   "appDescription": {
     "message": "Explora imatges del web actiu i gestiona una biblioteca manual d'imatges."
+  },
+  "aboutSignaturePrefix": {
+    "message": "una aplicació de"
   }
 }

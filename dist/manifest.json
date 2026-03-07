@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "loboTinify",
+  "name": "lobopix",
   "description": "__MSG_appDescription__",
   "default_locale": "en",
   "version": "1.0.0",
@@ -11,7 +11,7 @@
     "128": "assets/icons/loboQR-128.png"
   },
   "action": {
-    "default_title": "loboTinify",
+    "default_title": "lobopix",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "assets/icons/loboQR-16.png",

@@ -24,6 +24,7 @@ const elements = {
   pageUserBtn: document.getElementById('pageUserBtn'),
   pageAboutBtn: document.getElementById('pageAboutBtn'),
   aboutVersion: document.getElementById('aboutVersion'),
+  aboutSignatureTitle: document.getElementById('aboutSignatureTitle'),
   feedbackToast: document.getElementById('feedbackToast'),
   feedbackToastIcon: document.getElementById('feedbackToastIcon'),
   feedbackToastText: document.getElementById('feedbackToastText')
@@ -48,6 +49,7 @@ void init();
 async function init() {
   bindEvents();
   setThumbnailColumns(4);
+  renderLocalizedCopy();
   renderVersion();
   await loadManualLibrary();
   await resolveActiveTabContext();
@@ -241,6 +243,14 @@ function renderVersion() {
   }
   const manifest = chrome.runtime.getManifest();
   elements.aboutVersion.textContent = `Version ${manifest.version}`;
+}
+
+function renderLocalizedCopy() {
+  if (!elements.aboutSignatureTitle) {
+    return;
+  }
+  const localized = chrome.i18n.getMessage('aboutSignaturePrefix');
+  elements.aboutSignatureTitle.textContent = localized || 'una aplicació de';
 }
 
 function updateGalleryHeader() {
@@ -598,7 +608,10 @@ async function highlightSourceImageOnPage(sourceUrl) {
       func: (targetUrl) => {
         const styleId = 'lobotinify-highlight-style';
         const markAttr = 'data-lobotinify-highlight';
+        const overlayAttr = 'data-lobotinify-highlight-overlay';
         const markClass = 'lobotinify-highlighted-image';
+        const overlayClass = 'lobotinify-highlight-overlay';
+        const arrowClass = 'lobotinify-highlight-arrow';
         const timerKey = '__lobotinify_highlight_timer__';
         const base = document.baseURI || location.href;
 
@@ -634,6 +647,10 @@ async function highlightSourceImageOnPage(sourceUrl) {
             node.classList.remove(markClass);
             node.removeAttribute(markAttr);
           }
+          const overlays = document.querySelectorAll(`[${overlayAttr}="1"]`);
+          for (const overlay of overlays) {
+            overlay.remove();
+          }
         };
 
         const normalizedTarget = normalizeUrl(targetUrl);
@@ -657,11 +674,31 @@ async function highlightSourceImageOnPage(sourceUrl) {
           styleNode.id = styleId;
           styleNode.textContent = `
             .${markClass} {
-              outline: 3px solid #ef4444 !important;
-              outline-offset: 2px !important;
-              box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.4), 0 0 16px rgba(239, 68, 68, 0.5) !important;
+              box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.52) !important;
               border-radius: 4px !important;
-              transition: box-shadow 0.16s ease, outline-color 0.16s ease !important;
+              transition: box-shadow 0.16s ease !important;
+            }
+            .${overlayClass} {
+              position: absolute !important;
+              box-sizing: border-box !important;
+              border: 3px solid #ef4444 !important;
+              border-radius: 5px !important;
+              box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.36), 0 0 16px rgba(239, 68, 68, 0.45) !important;
+              pointer-events: none !important;
+              z-index: 2147483647 !important;
+            }
+            .${arrowClass} {
+              position: absolute !important;
+              width: 46px !important;
+              height: 46px !important;
+              pointer-events: none !important;
+              z-index: 2147483647 !important;
+            }
+            .${arrowClass} svg {
+              width: 100% !important;
+              height: 100% !important;
+              display: block !important;
+              filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.6)) !important;
             }
           `;
           const host = document.head || document.documentElement;
@@ -671,6 +708,86 @@ async function highlightSourceImageOnPage(sourceUrl) {
         clearMarks();
 
         const marked = [];
+        const drawOverlay = (node) => {
+          if (!(node instanceof Element)) {
+            return;
+          }
+          const rect = node.getBoundingClientRect();
+          const width = Math.max(0, Math.round(rect.width));
+          const height = Math.max(0, Math.round(rect.height));
+          if (width < 2 || height < 2) {
+            return;
+          }
+          const overlay = document.createElement('div');
+          overlay.className = overlayClass;
+          overlay.setAttribute(overlayAttr, '1');
+          overlay.style.left = `${Math.round(rect.left + window.scrollX)}px`;
+          overlay.style.top = `${Math.round(rect.top + window.scrollY)}px`;
+          overlay.style.width = `${width}px`;
+          overlay.style.height = `${height}px`;
+          const arrow = document.createElement('div');
+          arrow.className = arrowClass;
+          arrow.setAttribute(overlayAttr, '1');
+          arrow.style.left = `${Math.round(rect.left + window.scrollX - 24)}px`;
+          arrow.style.top = `${Math.round(rect.top + window.scrollY - 24)}px`;
+
+          const svgNs = 'http://www.w3.org/2000/svg';
+          const arrowSvg = document.createElementNS(svgNs, 'svg');
+          arrowSvg.setAttribute('viewBox', '0 0 64 64');
+          arrowSvg.setAttribute('aria-hidden', 'true');
+
+          const shaft = document.createElementNS(svgNs, 'line');
+          shaft.setAttribute('x1', '10');
+          shaft.setAttribute('y1', '54');
+          shaft.setAttribute('x2', '46');
+          shaft.setAttribute('y2', '18');
+          shaft.setAttribute('fill', 'none');
+          shaft.setAttribute('stroke', '#ef4444');
+          shaft.setAttribute('stroke-width', '9');
+          shaft.setAttribute('stroke-linecap', 'round');
+          shaft.setAttribute('stroke-linejoin', 'round');
+
+          const headA = document.createElementNS(svgNs, 'line');
+          headA.setAttribute('x1', '46');
+          headA.setAttribute('y1', '18');
+          headA.setAttribute('x2', '41');
+          headA.setAttribute('y2', '34');
+          headA.setAttribute('fill', 'none');
+          headA.setAttribute('stroke', '#ef4444');
+          headA.setAttribute('stroke-width', '8');
+          headA.setAttribute('stroke-linecap', 'round');
+          headA.setAttribute('stroke-linejoin', 'round');
+
+          const headB = document.createElementNS(svgNs, 'line');
+          headB.setAttribute('x1', '46');
+          headB.setAttribute('y1', '18');
+          headB.setAttribute('x2', '30');
+          headB.setAttribute('y2', '23');
+          headB.setAttribute('fill', 'none');
+          headB.setAttribute('stroke', '#ef4444');
+          headB.setAttribute('stroke-width', '8');
+          headB.setAttribute('stroke-linecap', 'round');
+          headB.setAttribute('stroke-linejoin', 'round');
+
+          arrowSvg.appendChild(shaft);
+          arrowSvg.appendChild(headA);
+          arrowSvg.appendChild(headB);
+          arrow.appendChild(arrowSvg);
+
+          const host = document.body || document.documentElement;
+          host.appendChild(overlay);
+          host.appendChild(arrow);
+          if (typeof arrow.animate === 'function') {
+            arrow.animate(
+              [
+                { transform: 'translate(-3px, -3px) rotate(90deg) scale(0.96)', opacity: 0.86 },
+                { transform: 'translate(4px, 4px) rotate(90deg) scale(1)', opacity: 1 },
+                { transform: 'translate(-3px, -3px) rotate(90deg) scale(0.96)', opacity: 0.86 }
+              ],
+              { duration: 880, iterations: Infinity, easing: 'ease-in-out' }
+            );
+          }
+        };
         const markNode = (node) => {
           if (!(node instanceof Element) || marked.includes(node)) {
             return;
@@ -678,6 +795,7 @@ async function highlightSourceImageOnPage(sourceUrl) {
           node.classList.add(markClass);
           node.setAttribute(markAttr, '1');
           marked.push(node);
+          drawOverlay(node);
         };
 
         const matchSrcSet = (srcset) => {
