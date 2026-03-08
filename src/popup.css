@@ -2813,9 +2813,12 @@ select:disabled {
 
 .export-wizard-meta {
   margin: 0;
-  font-size: 11px;
-  line-height: 1.3;
+  font-size: 10px;
+  line-height: 1.15;
   color: #334155;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .export-wizard-meta-panel {
@@ -2826,7 +2829,7 @@ select:disabled {
   border-radius: 8px;
   background: rgba(248, 250, 252, 0.92);
   display: grid;
-  align-content: start;
+  align-content: center;
   gap: 2px;
   overflow: hidden;
 }

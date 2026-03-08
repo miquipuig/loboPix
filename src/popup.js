@@ -18,7 +18,7 @@ const EXPORT_BACKGROUND_TOLERANCE_DEFAULT = 0;
 const EXPORT_BACKGROUND_TOLERANCE_MAX = 120;
 const ZIP_MAX_COMPRESSION_LEVEL = 9;
 const FAVICON_PRESET_SIZES = [16, 32, 48, 64, 128, 180, 192, 256, 512];
-const EXPORT_RECOMMENDATION_CANDIDATES = [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96];
+const EXPORT_RECOMMENDATION_CANDIDATES = [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 100];
 const EXPORT_RECOMMENDATION_MAX_EDGE = 256;
 const EXPORT_RECOMMENDATION_ERROR_THRESHOLD = {
   'image/png': 14,
@@ -1025,9 +1025,9 @@ function resolvePngColorCountFromCompression(compression) {
     return 0;
   }
   const ratio = safeCompression / 100;
-  const easedRatio = Math.pow(ratio, 0.9);
-  const colors = Math.round(256 - easedRatio * 248);
-  return Math.max(8, Math.min(256, colors));
+  const easedRatio = Math.pow(ratio, 2.2);
+  const colors = Math.round(256 - easedRatio * 254);
+  return Math.max(2, Math.min(256, colors));
 }
 
 function createFullExportCropRect() {
@@ -1582,12 +1582,12 @@ function setExportRecommendedCompression(compression) {
   elements.exportCompressionRecommendedDot.title = `Recomanat ${safeCompression}%`;
 }
 
-function resolveExportPreviewTargetSize(item, preset) {
+function resolveExportPreviewTargetSize(item, preset, editOptions = {}) {
   const safePreset = normalizeExportPreset(preset);
   if (safePreset !== EXPORT_PRESET_FAVICON) {
     return 0;
   }
-  return Math.min(128, resolveFaviconMaxSourceSize(item));
+  return Math.min(128, resolveFaviconMaxSourceSize(item, editOptions));
 }
 
 function resolveRecommendationCacheKey(item, format, preset, editOptions = {}) {
@@ -1612,7 +1612,138 @@ function resolveRecommendationErrorThreshold(format) {
   return EXPORT_RECOMMENDATION_ERROR_THRESHOLD[safeFormat] || EXPORT_RECOMMENDATION_ERROR_THRESHOLD['image/webp'];
 }
 
-function pickRecommendedCompression(results, format) {
+function analyzePngRecommendationCanvas(canvas) {
+  const ctx = canvas?.getContext?.('2d');
+  const width = Math.max(1, Number(canvas?.width) || 1);
+  const height = Math.max(1, Number(canvas?.height) || 1);
+  if (!ctx) {
+    return null;
+  }
+
+  const imageData = ctx.getImageData(0, 0, width, height).data;
+  const step = Math.max(1, Math.ceil(Math.max(width, height) / 96));
+  const exactColors = new Set();
+  const bucketColors = new Set();
+  const maxTrackedColors = 2048;
+  let pairCount = 0;
+  let flatPairs = 0;
+  let smoothPairs = 0;
+  let hardPairs = 0;
+
+  const readIndex = (x, y) => ((y * width) + x) * 4;
+  const addColor = (index) => {
+    const r = imageData[index];
+    const g = imageData[index + 1];
+    const b = imageData[index + 2];
+    const a = imageData[index + 3];
+    if (exactColors.size <= maxTrackedColors) {
+      const key = (((r << 24) >>> 0) | (g << 16) | (b << 8) | a) >>> 0;
+      exactColors.add(key);
+    }
+    if (bucketColors.size <= maxTrackedColors) {
+      const key = ((r >> 3) << 14) | ((g >> 3) << 9) | ((b >> 3) << 4) | (a >> 4);
+      bucketColors.add(key);
+    }
+  };
+
+  const measurePair = (leftIndex, rightIndex) => {
+    const diff =
+      Math.abs(imageData[leftIndex] - imageData[rightIndex]) +
+      Math.abs(imageData[leftIndex + 1] - imageData[rightIndex + 1]) +
+      Math.abs(imageData[leftIndex + 2] - imageData[rightIndex + 2]) +
+      (Math.abs(imageData[leftIndex + 3] - imageData[rightIndex + 3]) * 0.35);
+    pairCount += 1;
+    if (diff <= 8) {
+      flatPairs += 1;
+      return;
+    }
+    if (diff <= 42) {
+      smoothPairs += 1;
+      return;
+    }
+    hardPairs += 1;
+  };
+
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const index = readIndex(x, y);
+      addColor(index);
+      if (x + step < width) {
+        measurePair(index, readIndex(x + step, y));
+      }
+      if (y + step < height) {
+        measurePair(index, readIndex(x, y + step));
+      }
+    }
+  }
+
+  const exactColorCount = exactColors.size > maxTrackedColors ? maxTrackedColors + 1 : exactColors.size;
+  const bucketColorCount = bucketColors.size > maxTrackedColors ? maxTrackedColors + 1 : bucketColors.size;
+  const safePairCount = Math.max(1, pairCount);
+  const flatRatio = flatPairs / safePairCount;
+  const smoothRatio = smoothPairs / safePairCount;
+  const hardRatio = hardPairs / safePairCount;
+
+  return {
+    exactColorCount,
+    bucketColorCount,
+    flatRatio,
+    smoothRatio,
+    hardRatio,
+    paletteFriendly: exactColorCount <= 16 && smoothRatio < 0.12,
+    gradientRisk: bucketColorCount >= 96 && smoothRatio >= 0.18 && hardRatio <= 0.5
+  };
+}
+
+function resolvePngRecommendationStrategy(analysis) {
+  const base = {
+    maxCompression: 100,
+    thresholdScale: 1,
+    sizeGainRatio: 0.997,
+    preferredMinColors: 0,
+    hardMinColors: 0
+  };
+  if (!analysis) {
+    return base;
+  }
+  if (analysis.paletteFriendly) {
+    return {
+      ...base,
+      thresholdScale: 1.3,
+      sizeGainRatio: 0.999
+    };
+  }
+  if (analysis.gradientRisk) {
+    return {
+      ...base,
+      maxCompression: 72,
+      thresholdScale: 0.42,
+      sizeGainRatio: 0.992,
+      preferredMinColors: 96,
+      hardMinColors: 64
+    };
+  }
+  if (analysis.bucketColorCount >= 160) {
+    return {
+      ...base,
+      maxCompression: 80,
+      thresholdScale: 0.62,
+      sizeGainRatio: 0.994,
+      preferredMinColors: 64,
+      hardMinColors: 32
+    };
+  }
+  if (analysis.exactColorCount <= 32) {
+    return {
+      ...base,
+      thresholdScale: 1.15,
+      sizeGainRatio: 0.998
+    };
+  }
+  return base;
+}
+
+function pickRecommendedCompression(results, format, strategy = null) {
   const valid = Array.isArray(results)
     ? results.filter((entry) => Number.isFinite(entry?.compression) && Number.isFinite(entry?.size) && Number.isFinite(entry?.error))
     : [];
@@ -1622,9 +1753,18 @@ function pickRecommendedCompression(results, format) {
   valid.sort((left, right) => left.compression - right.compression);
   const baseline = valid.find((entry) => entry.compression === 0) || valid[0];
   const baselineSize = Math.max(1, Number(baseline.size) || 1);
-  const threshold = resolveRecommendationErrorThreshold(format);
+  const threshold = resolveRecommendationErrorThreshold(format) * Math.max(0.2, Number(strategy?.thresholdScale) || 1);
+  const sizeGainRatio = Math.min(0.9995, Math.max(0.9, Number(strategy?.sizeGainRatio) || 0.997));
+  const preferredMinColors = Math.max(0, Number(strategy?.preferredMinColors) || 0);
+  const hardMinColors = Math.max(0, Number(strategy?.hardMinColors) || 0);
 
-  const qualitySafe = valid.filter((entry) => entry.error <= threshold && entry.size <= baselineSize * 0.997);
+  const qualitySafe = valid.filter((entry) => {
+    const colorCount = Math.max(0, Number(entry?.colorCount) || 0);
+    if (hardMinColors > 0 && colorCount > 0 && colorCount < hardMinColors) {
+      return false;
+    }
+    return entry.error <= threshold && entry.size <= baselineSize * sizeGainRatio;
+  });
   if (qualitySafe.length > 0) {
     return qualitySafe[qualitySafe.length - 1].compression;
   }
@@ -1635,7 +1775,16 @@ function pickRecommendedCompression(results, format) {
     const sizeScore = entry.size / baselineSize;
     const errorPenalty = Math.max(0, entry.error - threshold) * 0.06;
     const softError = (entry.error / Math.max(1, threshold)) * 0.02;
-    const score = sizeScore + errorPenalty + softError;
+    const colorCount = Math.max(0, Number(entry?.colorCount) || 0);
+    const colorPenalty =
+      preferredMinColors > 0 && colorCount > 0 && colorCount < preferredMinColors
+        ? ((preferredMinColors - colorCount) / preferredMinColors) * 0.35
+        : 0;
+    const hardPenalty =
+      hardMinColors > 0 && colorCount > 0 && colorCount < hardMinColors
+        ? 0.85
+        : 0;
+    const score = sizeScore + errorPenalty + softError + colorPenalty + hardPenalty;
     if (score < bestScore) {
       bestScore = score;
       best = entry;
@@ -1714,7 +1863,7 @@ async function estimateRecommendedCompressionForItem(item, options = {}) {
     backgroundTolerance: options.backgroundTolerance
   };
   const format = resolveEffectiveExportFormat(options.format || state.exportWizardFormat, preset, editOptions);
-  const targetSize = resolveExportPreviewTargetSize(item, preset);
+  const targetSize = resolveExportPreviewTargetSize(item, preset, editOptions);
 
   const image = await loadImage(dataUrl);
   const canvas = buildExportCanvasFromImage(image, {
@@ -1727,14 +1876,23 @@ async function estimateRecommendedCompressionForItem(item, options = {}) {
   if (!ctx) {
     return EXPORT_DEFAULT_COMPRESSION;
   }
+  const pngAnalysis = format === 'image/png' ? analyzePngRecommendationCanvas(canvas) : null;
+  const pngStrategy = format === 'image/png' ? resolvePngRecommendationStrategy(pngAnalysis) : null;
   const width = Math.max(1, Number(canvas.width) || 1);
   const height = Math.max(1, Number(canvas.height) || 1);
   const referencePixels = ctx.getImageData(0, 0, width, height).data;
 
   const results = [];
-  for (const candidate of EXPORT_RECOMMENDATION_CANDIDATES) {
+  const candidateCompressions = EXPORT_RECOMMENDATION_CANDIDATES.filter((candidate) => {
+    if (format !== 'image/png') {
+      return true;
+    }
+    return candidate <= (pngStrategy?.maxCompression ?? 100);
+  });
+  for (const candidate of candidateCompressions) {
     const compression = normalizeExportCompression(candidate);
     const quality = resolveExportQuality(format, preset, compression);
+    const colorCount = format === 'image/png' ? resolvePngColorCountFromCompression(compression) : 0;
     const blob = await encodeCanvasToExportBlob(canvas, {
       format,
       quality,
@@ -1746,11 +1904,12 @@ async function estimateRecommendedCompressionForItem(item, options = {}) {
         : await computeBlobVisualMse(blob, referencePixels, width, height);
     results.push({
       compression,
+      colorCount,
       size: Math.max(1, Number(blob?.size) || 1),
       error
     });
   }
-  return pickRecommendedCompression(results, format);
+  return pickRecommendedCompression(results, format, pngStrategy);
 }
 
 async function computeBlobVisualMse(blob, referencePixels, width, height) {
@@ -1844,14 +2003,39 @@ function resolveExportQuality(format, preset, compression) {
   return resolveLossyQualityFromCompression(compression);
 }
 
-function resolveFaviconMaxSourceSize(item) {
-  const width = Math.max(0, Number(item?.width) || 0);
-  const height = Math.max(0, Number(item?.height) || 0);
+function resolveExportSourceDimensions(item, editOptions = {}) {
+  const sourceWidth = Math.max(0, Number(item?.width) || 0);
+  const sourceHeight = Math.max(0, Number(item?.height) || 0);
+  if (sourceWidth <= 0 || sourceHeight <= 0) {
+    return { width: 0, height: 0 };
+  }
+
+  const cropEnabled = editOptions.cropEnabled === true;
+  const cropRect = cropEnabled ? clampExportCropRect(editOptions.cropRect) : createFullExportCropRect();
+  const cropLeft = Math.max(0, Math.min(sourceWidth - 1, Math.round(cropRect.x * sourceWidth)));
+  const cropTop = Math.max(0, Math.min(sourceHeight - 1, Math.round(cropRect.y * sourceHeight)));
+  const cropRight = Math.max(
+    cropLeft + 1,
+    Math.min(sourceWidth, Math.round((cropRect.x + cropRect.width) * sourceWidth))
+  );
+  const cropBottom = Math.max(
+    cropTop + 1,
+    Math.min(sourceHeight, Math.round((cropRect.y + cropRect.height) * sourceHeight))
+  );
+
+  return {
+    width: Math.max(1, cropRight - cropLeft),
+    height: Math.max(1, cropBottom - cropTop)
+  };
+}
+
+function resolveFaviconMaxSourceSize(item, editOptions = {}) {
+  const { width, height } = resolveExportSourceDimensions(item, editOptions);
   return Math.max(0, Math.min(width, height));
 }
 
-function resolveFaviconExportSizes(item) {
-  const maxSourceSize = resolveFaviconMaxSourceSize(item);
+function resolveFaviconExportSizes(item, editOptions = {}) {
+  const maxSourceSize = resolveFaviconMaxSourceSize(item, editOptions);
   if (maxSourceSize <= 0) {
     return [];
   }
@@ -2037,7 +2221,9 @@ async function refreshExportWizardPreview() {
   const editOptions = getCurrentExportEditOptions();
   const previewEditOptions = getCurrentExportPreviewEditOptions(preset);
   const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
-  const exportPreviewSize = resolveExportPreviewTargetSize(state.exportWizardItem, preset);
+  const exportPreviewSize = resolveExportPreviewTargetSize(state.exportWizardItem, preset, editOptions);
+  const faviconMaxSize =
+    preset === EXPORT_PRESET_FAVICON ? resolveFaviconMaxSourceSize(state.exportWizardItem, editOptions) : 0;
   const imagePreviewSize = preset === EXPORT_PRESET_FAVICON ? 0 : exportPreviewSize;
   const quality = resolveExportQuality(format, preset, state.exportWizardCompression);
 
@@ -2082,8 +2268,8 @@ async function refreshExportWizardPreview() {
       const compressionLabel =
         preset === EXPORT_PRESET_FAVICON
           ? normalizeExportCompression(state.exportWizardCompression) <= 0
-            ? `PNG sense pèrdua · ZIP DEFLATE ${resolveZipCompressionLevel(state.exportWizardCompression)}/${ZIP_MAX_COMPRESSION_LEVEL}`
-            : `PNG ${normalizeExportCompression(state.exportWizardCompression)}% (${pngColorCount} colors) · ZIP DEFLATE ${resolveZipCompressionLevel(state.exportWizardCompression)}/${ZIP_MAX_COMPRESSION_LEVEL}`
+            ? 'PNG sense pèrdua'
+            : `PNG ${normalizeExportCompression(state.exportWizardCompression)}% (${pngColorCount} colors)`
           : format === 'image/png'
             ? normalizeExportCompression(state.exportWizardCompression) <= 0
               ? 'PNG sense pèrdua'
@@ -2093,16 +2279,15 @@ async function refreshExportWizardPreview() {
       const originalHeight = Math.max(0, Number(state.exportWizardItem?.height) || 0);
       const hasOriginalDims = originalWidth > 0 && originalHeight > 0;
       const exportDimsLabel =
-        hasOriginalDims && (metaAsset.width !== originalWidth || metaAsset.height !== originalHeight)
-          ? ` · ${metaAsset.width}x${metaAsset.height} px`
+        preset === EXPORT_PRESET_FAVICON
+          ? faviconMaxSize > 0
+            ? ` · fins a ${faviconMaxSize}x${faviconMaxSize} px`
+            : ''
+          : hasOriginalDims && (metaAsset.width !== originalWidth || metaAsset.height !== originalHeight)
+            ? ` · ${metaAsset.width}x${metaAsset.height} px`
           : '';
-      const toolLabels = [];
-      if (editOptions.transparentBackground) {
-        toolLabels.push('fons transparent');
-      }
-      const toolsLabel = toolLabels.length > 0 ? ` · ${toolLabels.join(' · ')}` : '';
       elements.exportWizardPreviewMeta.textContent =
-        `Export · ${formatLabel}${exportDimsLabel} · ${formatBytes(metaAsset.blob.size)} · ${compressionLabel}${toolsLabel}`;
+        `Export · ${formatLabel}${exportDimsLabel} · ${formatBytes(metaAsset.blob.size)} · ${compressionLabel}`;
     }
   } catch (error) {
     if (token !== state.exportWizardPreviewToken) {
@@ -2142,7 +2327,7 @@ async function exportWizardDownload() {
 
   try {
     if (preset === EXPORT_PRESET_FAVICON) {
-      const faviconSizes = resolveFaviconExportSizes(state.exportWizardItem);
+      const faviconSizes = resolveFaviconExportSizes(state.exportWizardItem, editOptions);
       if (faviconSizes.length === 0) {
         showFeedbackToast('No s\'ha pogut calcular mides favicon valides', 'error');
         return;
@@ -2270,6 +2455,27 @@ function buildExportCanvasFromImage(image, options = {}) {
   let width = targetSize > 0 ? targetSize : cropWidth;
   let height = targetSize > 0 ? targetSize : cropHeight;
 
+  const sourceCanvas = document.createElement('canvas');
+  sourceCanvas.width = cropWidth;
+  sourceCanvas.height = cropHeight;
+  const sourceCtx = sourceCanvas.getContext('2d');
+  if (!sourceCtx) {
+    throw new Error('canvas_context_unavailable');
+  }
+  sourceCtx.imageSmoothingEnabled = true;
+  sourceCtx.imageSmoothingQuality = 'high';
+  if (format === 'image/jpeg') {
+    sourceCtx.fillStyle = '#ffffff';
+    sourceCtx.fillRect(0, 0, cropWidth, cropHeight);
+  } else {
+    sourceCtx.clearRect(0, 0, cropWidth, cropHeight);
+  }
+  sourceCtx.drawImage(image, cropLeft, cropTop, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+  if (options.transparentBackground === true && format !== 'image/jpeg') {
+    removeBackgroundFromCanvas(sourceCanvas, normalizeExportBackgroundTolerance(options.backgroundTolerance));
+  }
+
   if (maxEdge > 0) {
     const dominantEdge = Math.max(width, height);
     if (dominantEdge > maxEdge) {
@@ -2302,13 +2508,9 @@ function buildExportCanvasFromImage(image, options = {}) {
     const drawHeight = Math.max(1, Math.round(cropHeight * scale));
     const drawX = Math.round((width - drawWidth) / 2);
     const drawY = Math.round((height - drawHeight) / 2);
-    ctx.drawImage(image, cropLeft, cropTop, cropWidth, cropHeight, drawX, drawY, drawWidth, drawHeight);
+    ctx.drawImage(sourceCanvas, 0, 0, cropWidth, cropHeight, drawX, drawY, drawWidth, drawHeight);
   } else {
-    ctx.drawImage(image, cropLeft, cropTop, cropWidth, cropHeight, 0, 0, width, height);
-  }
-
-  if (options.transparentBackground === true && format !== 'image/jpeg') {
-    removeBackgroundFromCanvas(canvas, normalizeExportBackgroundTolerance(options.backgroundTolerance));
+    ctx.drawImage(sourceCanvas, 0, 0, cropWidth, cropHeight, 0, 0, width, height);
   }
   return canvas;
 }
