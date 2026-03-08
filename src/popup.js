@@ -90,7 +90,7 @@ const elements = {
   exportCompressionRange: document.getElementById('exportCompressionRange'),
   exportCompressionValue: document.getElementById('exportCompressionValue'),
   exportCompressionRecommendedDot: document.getElementById('exportCompressionRecommendedDot'),
-  exportWizardCancelBtn: document.getElementById('exportWizardCancelBtn'),
+  exportWizardCloseBtn: document.getElementById('exportWizardCloseBtn'),
   exportWizardDownloadBtn: document.getElementById('exportWizardDownloadBtn'),
   exportWizardDownloadLabel: document.getElementById('exportWizardDownloadLabel'),
   exportWizardDownloadHint: document.getElementById('exportWizardDownloadHint'),
@@ -271,8 +271,8 @@ function bindEvents() {
     });
   }
 
-  if (elements.exportWizardCancelBtn instanceof HTMLButtonElement) {
-    elements.exportWizardCancelBtn.addEventListener('click', () => {
+  if (elements.exportWizardCloseBtn instanceof HTMLButtonElement) {
+    elements.exportWizardCloseBtn.addEventListener('click', () => {
       closeExportWizardModal();
     });
   }

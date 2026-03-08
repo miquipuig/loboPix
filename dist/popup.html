@@ -179,10 +179,21 @@
 
       <div id="exportWizardModal" class="save-as-modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="exportWizardTitle">
         <div class="save-as-modal-card export-wizard-card">
-          <h3 id="exportWizardTitle" class="save-as-modal-title">Export wizard</h3>
-          <p id="exportWizardSourceName" class="export-wizard-source-name"></p>
-          <label for="exportWizardNameInput" class="save-as-modal-label">Nombre de exportación</label>
-          <input id="exportWizardNameInput" class="save-as-modal-input" type="text" maxlength="180" placeholder="nombre-archivo" />
+          <div class="export-wizard-header">
+            <h3 id="exportWizardTitle" class="save-as-modal-title export-wizard-title">Exportar</h3>
+            <button id="exportWizardCloseBtn" class="export-wizard-close-btn" type="button" aria-label="Cerrar export wizard" title="Cerrar">
+              <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
+          </div>
+          <div class="export-name-composer" role="group" aria-labelledby="exportFileGroupLabel">
+            <span id="exportFileGroupLabel" class="export-name-badge">Archivo</span>
+            <input id="exportWizardNameInput" class="save-as-modal-input export-name-input" type="text" maxlength="180" placeholder="nombre-archivo" aria-label="Nombre del archivo" />
+            <select id="exportFormatSelect" class="save-as-modal-input export-name-format-select" aria-label="Formato de exportación">
+              <option value="image/webp">WebP</option>
+              <option value="image/png">PNG</option>
+              <option value="image/jpeg">JPG</option>
+            </select>
+          </div>
           <div class="export-wizard-preview-wrap">
             <img id="exportWizardPreviewImg" class="export-wizard-preview-img" alt="Previsualització export" />
             <button id="exportCropToggleBtn" class="export-crop-toolbar-btn" type="button" aria-label="Activar recorte" aria-pressed="false" title="Recortar">
@@ -258,13 +269,7 @@
             <option value="favicon">Favicon (ZIP multimida)</option>
           </select>
           <div class="export-format-compression-compact">
-            <label for="exportFormatSelect" class="save-as-modal-label export-format-label">Formato</label>
             <label for="exportCompressionRange" class="save-as-modal-label">Compresión</label>
-            <select id="exportFormatSelect" class="save-as-modal-input export-inline-format-select">
-              <option value="image/webp">WebP</option>
-              <option value="image/png">PNG</option>
-              <option value="image/jpeg">JPG</option>
-            </select>
             <div class="export-compression-row">
               <div class="export-compression-track">
                 <div class="export-compression-ticks" aria-hidden="true"></div>
@@ -284,7 +289,6 @@
                 <span id="exportWizardDownloadHint" class="export-primary-cta-subtitle">Descargar archivo</span>
               </span>
             </button>
-            <button id="exportWizardCancelBtn" class="btn btn-outline-secondary btn-sm export-secondary-cta" type="button">Cerrar</button>
           </div>
         </div>
       </div>
