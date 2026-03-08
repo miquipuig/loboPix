@@ -193,21 +193,44 @@
                 <i class="bi bi-circle-half" aria-hidden="true"></i>
               </button>
               <div id="exportTransparentBgPopover" class="export-floating-control" aria-hidden="true">
-                <div
-                  id="exportTransparentBgSlider"
-                  class="export-transparent-slider"
-                  tabindex="0"
-                  role="slider"
-                  aria-label="Sensibilidad del fondo transparente"
-                  aria-valuemin="0"
-                  aria-valuemax="120"
-                  aria-valuenow="0"
-                >
-                  <span class="export-transparent-slider-track" aria-hidden="true"></span>
-                  <span id="exportTransparentBgSliderFill" class="export-transparent-slider-fill" aria-hidden="true"></span>
-                  <span id="exportTransparentBgSliderThumb" class="export-transparent-slider-thumb" aria-hidden="true"></span>
+                <div class="export-transparent-slider-grid">
+                  <div class="export-transparent-slider-group">
+                    <span class="export-tool-mini-label">Tol</span>
+                    <div
+                      id="exportTransparentBgSlider"
+                      class="export-transparent-slider"
+                      tabindex="0"
+                      role="slider"
+                      aria-label="Sensibilidad del fondo transparente"
+                      aria-valuemin="0"
+                      aria-valuemax="120"
+                      aria-valuenow="0"
+                    >
+                      <span class="export-transparent-slider-track" aria-hidden="true"></span>
+                      <span id="exportTransparentBgSliderFill" class="export-transparent-slider-fill" aria-hidden="true"></span>
+                      <span id="exportTransparentBgSliderThumb" class="export-transparent-slider-thumb" aria-hidden="true"></span>
+                    </div>
+                    <span id="exportTransparentBgToleranceValue" class="export-tool-value export-tool-value-centered">0</span>
+                  </div>
+                  <div class="export-transparent-slider-group">
+                    <span class="export-tool-mini-label">Lim</span>
+                    <div
+                      id="exportTransparentBgProtectionSlider"
+                      class="export-transparent-slider"
+                      tabindex="0"
+                      role="slider"
+                      aria-label="Límite interior de la transparencia"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow="0"
+                    >
+                      <span class="export-transparent-slider-track" aria-hidden="true"></span>
+                      <span id="exportTransparentBgProtectionSliderFill" class="export-transparent-slider-fill" aria-hidden="true"></span>
+                      <span id="exportTransparentBgProtectionSliderThumb" class="export-transparent-slider-thumb" aria-hidden="true"></span>
+                    </div>
+                    <span id="exportTransparentBgProtectionValue" class="export-tool-value export-tool-value-centered">0</span>
+                  </div>
                 </div>
-                <span id="exportTransparentBgToleranceValue" class="export-tool-value export-tool-value-centered">0</span>
               </div>
             </div>
             <div id="exportCropStage" class="export-crop-stage hidden" aria-hidden="true">

@@ -2616,15 +2616,13 @@ select:disabled {
   top: 50%;
   z-index: 60;
   transform: translateY(-50%);
-  width: 28px;
-  padding: 8px 3px 6px;
+  width: 56px;
+  padding: 8px 5px 6px;
   border: 1px solid rgba(148, 163, 184, 0.3);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 12px 26px rgba(15, 23, 42, 0.12);
-  display: grid;
-  justify-items: center;
-  gap: 8px;
+  display: block;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.14s ease;
@@ -2684,6 +2682,28 @@ select:disabled {
   box-shadow:
     0 0 0 1px rgba(37, 99, 235, 0.35),
     0 0 0 4px rgba(59, 130, 246, 0.18);
+}
+
+.export-transparent-slider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  justify-items: center;
+}
+
+.export-transparent-slider-group {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}
+
+.export-tool-mini-label {
+  font-size: 8px;
+  line-height: 1;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #64748b;
+  letter-spacing: 0.04em;
 }
 
 .export-crop-stage {

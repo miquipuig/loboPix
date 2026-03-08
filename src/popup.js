@@ -16,6 +16,8 @@ const EXPORT_MAX_QUALITY = 1;
 const EXPORT_CROP_MIN_RATIO = 0.05;
 const EXPORT_BACKGROUND_TOLERANCE_DEFAULT = 0;
 const EXPORT_BACKGROUND_TOLERANCE_MAX = 120;
+const EXPORT_BACKGROUND_PROTECTION_DEFAULT = 0;
+const EXPORT_BACKGROUND_PROTECTION_MAX = 100;
 const ZIP_MAX_COMPRESSION_LEVEL = 9;
 const FAVICON_PRESET_SIZES = [16, 32, 48, 64, 128, 180, 192, 256, 512];
 const EXPORT_RECOMMENDATION_CANDIDATES = [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 100];
@@ -74,9 +76,13 @@ const elements = {
   exportTransparentBgSlider: document.getElementById('exportTransparentBgSlider'),
   exportTransparentBgSliderFill: document.getElementById('exportTransparentBgSliderFill'),
   exportTransparentBgSliderThumb: document.getElementById('exportTransparentBgSliderThumb'),
+  exportTransparentBgProtectionSlider: document.getElementById('exportTransparentBgProtectionSlider'),
+  exportTransparentBgProtectionSliderFill: document.getElementById('exportTransparentBgProtectionSliderFill'),
+  exportTransparentBgProtectionSliderThumb: document.getElementById('exportTransparentBgProtectionSliderThumb'),
   exportWizardOriginalMeta: document.getElementById('exportWizardOriginalMeta'),
   exportWizardPreviewMeta: document.getElementById('exportWizardPreviewMeta'),
   exportTransparentBgToleranceValue: document.getElementById('exportTransparentBgToleranceValue'),
+  exportTransparentBgProtectionValue: document.getElementById('exportTransparentBgProtectionValue'),
   exportFormatSelect: document.getElementById('exportFormatSelect'),
   exportPresetSelect: document.getElementById('exportPresetSelect'),
   exportCompressionRange: document.getElementById('exportCompressionRange'),
@@ -119,7 +125,9 @@ const state = {
   exportWizardCropInteraction: null,
   exportWizardTransparentBackground: false,
   exportWizardBackgroundTolerance: EXPORT_BACKGROUND_TOLERANCE_DEFAULT,
+  exportWizardBackgroundProtection: EXPORT_BACKGROUND_PROTECTION_DEFAULT,
   exportWizardTransparentAdjusting: false,
+  exportWizardTransparentAdjustingControl: '',
   exportWizardTransparentPointerId: null,
   exportWizardPreviewUrl: '',
   exportWizardPreviewToken: 0,
@@ -350,7 +358,11 @@ function bindEvents() {
     if (state.exportWizardTransparentAdjusting !== true || event.pointerId !== state.exportWizardTransparentPointerId) {
       return;
     }
-    updateExportTransparentToleranceFromClientY(event.clientY);
+    if (state.exportWizardTransparentAdjustingControl === 'protection') {
+      updateExportTransparentProtectionFromClientY(event.clientY);
+    } else {
+      updateExportTransparentToleranceFromClientY(event.clientY);
+    }
     logExportTransparentDebug('slider pointermove', {
       clientY: Math.round(event.clientY)
     });
@@ -363,6 +375,7 @@ function bindEvents() {
       return;
     }
     state.exportWizardTransparentAdjusting = false;
+    state.exportWizardTransparentAdjustingControl = '';
     state.exportWizardTransparentPointerId = null;
     updateExportTransparentBackgroundUi();
     logExportTransparentDebug('window pointerup');
@@ -373,6 +386,7 @@ function bindEvents() {
       return;
     }
     state.exportWizardTransparentAdjusting = false;
+    state.exportWizardTransparentAdjustingControl = '';
     state.exportWizardTransparentPointerId = null;
     updateExportTransparentBackgroundUi();
     logExportTransparentDebug('window pointercancel');
@@ -387,6 +401,7 @@ function bindEvents() {
   if (elements.exportTransparentBgSlider instanceof HTMLElement) {
     elements.exportTransparentBgSlider.addEventListener('pointerdown', (event) => {
       state.exportWizardTransparentAdjusting = true;
+      state.exportWizardTransparentAdjustingControl = 'tolerance';
       state.exportWizardTransparentPointerId = event.pointerId;
       updateExportTransparentToleranceFromClientY(event.clientY);
       elements.exportTransparentBgSlider.setPointerCapture?.(event.pointerId);
@@ -416,6 +431,47 @@ function bindEvents() {
         setExportTransparentTolerance(state.exportWizardBackgroundTolerance + delta);
       }
       logExportTransparentDebug('slider keydown', { key: event.key });
+      syncExportFormatControlState();
+      updateExportTransparentBackgroundUi();
+      void refreshExportWizardPreview();
+      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+      event.preventDefault();
+    });
+  }
+
+  if (elements.exportTransparentBgProtectionSlider instanceof HTMLElement) {
+    elements.exportTransparentBgProtectionSlider.addEventListener('pointerdown', (event) => {
+      state.exportWizardTransparentAdjusting = true;
+      state.exportWizardTransparentAdjustingControl = 'protection';
+      state.exportWizardTransparentPointerId = event.pointerId;
+      updateExportTransparentProtectionFromClientY(event.clientY);
+      elements.exportTransparentBgProtectionSlider.setPointerCapture?.(event.pointerId);
+      logExportTransparentDebug('protection slider pointerdown', {
+        clientY: Math.round(event.clientY)
+      });
+      syncExportFormatControlState();
+      updateExportTransparentBackgroundUi();
+      void refreshExportWizardPreview();
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    elements.exportTransparentBgProtectionSlider.addEventListener('keydown', (event) => {
+      let delta = 0;
+      if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
+        delta = 4;
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') {
+        delta = -4;
+      } else if (event.key === 'Home') {
+        setExportTransparentProtection(0);
+      } else if (event.key === 'End') {
+        setExportTransparentProtection(EXPORT_BACKGROUND_PROTECTION_MAX);
+      } else {
+        return;
+      }
+      if (delta !== 0) {
+        setExportTransparentProtection(state.exportWizardBackgroundProtection + delta);
+      }
+      logExportTransparentDebug('protection slider keydown', { key: event.key });
       syncExportFormatControlState();
       updateExportTransparentBackgroundUi();
       void refreshExportWizardPreview();
@@ -1104,6 +1160,14 @@ function normalizeExportBackgroundTolerance(value) {
   return Math.max(0, Math.min(EXPORT_BACKGROUND_TOLERANCE_MAX, raw));
 }
 
+function normalizeExportBackgroundProtection(value) {
+  const raw = Math.round(Number(value));
+  if (!Number.isFinite(raw)) {
+    return EXPORT_BACKGROUND_PROTECTION_DEFAULT;
+  }
+  return Math.max(0, Math.min(EXPORT_BACKGROUND_PROTECTION_MAX, raw));
+}
+
 function logExportTransparentDebug(label, extra = {}) {
   const button = elements.exportTransparentBgBtn;
   const popover = elements.exportTransparentBgPopover;
@@ -1113,8 +1177,10 @@ function logExportTransparentDebug(label, extra = {}) {
   const sliderRect = slider instanceof HTMLElement ? slider.getBoundingClientRect() : null;
   console.log(`[export-transparent] ${label}`, {
     tolerance: state.exportWizardBackgroundTolerance,
+    protection: state.exportWizardBackgroundProtection,
     enabled: state.exportWizardTransparentBackground,
     adjusting: state.exportWizardTransparentAdjusting,
+    adjustingControl: state.exportWizardTransparentAdjustingControl,
     buttonPressed: button instanceof HTMLButtonElement ? button.getAttribute('aria-pressed') : null,
     popoverHiddenClass: popover instanceof HTMLElement ? popover.classList.contains('hidden') : null,
     popoverAriaHidden: popover instanceof HTMLElement ? popover.getAttribute('aria-hidden') : null,
@@ -1138,15 +1204,35 @@ function setExportTransparentTolerance(nextTolerance) {
   state.exportWizardTransparentBackground = tolerance > 0;
 }
 
+function setExportTransparentProtection(nextProtection) {
+  state.exportWizardBackgroundProtection = normalizeExportBackgroundProtection(nextProtection);
+}
+
+function resolveExportTransparentSliderRatio(slider, clientY) {
+  if (!(slider instanceof HTMLElement)) {
+    return 0;
+  }
+  const rect = slider.getBoundingClientRect();
+  const offset = Math.max(0, Math.min(rect.height, rect.bottom - clientY));
+  return rect.height > 0 ? offset / rect.height : 0;
+}
+
 function updateExportTransparentToleranceFromClientY(clientY) {
   if (!(elements.exportTransparentBgSlider instanceof HTMLElement)) {
     return;
   }
-  const rect = elements.exportTransparentBgSlider.getBoundingClientRect();
-  const offset = Math.max(0, Math.min(rect.height, rect.bottom - clientY));
-  const ratio = rect.height > 0 ? offset / rect.height : 0;
+  const ratio = resolveExportTransparentSliderRatio(elements.exportTransparentBgSlider, clientY);
   const nextTolerance = Math.round(ratio * EXPORT_BACKGROUND_TOLERANCE_MAX);
   setExportTransparentTolerance(nextTolerance);
+}
+
+function updateExportTransparentProtectionFromClientY(clientY) {
+  if (!(elements.exportTransparentBgProtectionSlider instanceof HTMLElement)) {
+    return;
+  }
+  const ratio = resolveExportTransparentSliderRatio(elements.exportTransparentBgProtectionSlider, clientY);
+  const nextProtection = Math.round(ratio * EXPORT_BACKGROUND_PROTECTION_MAX);
+  setExportTransparentProtection(nextProtection);
 }
 
 function getExportCropStageMetrics() {
@@ -1498,14 +1584,18 @@ function updateExportTransparentBackgroundUi() {
   const enabled = normalizeExportBackgroundTolerance(state.exportWizardBackgroundTolerance) > 0;
   state.exportWizardTransparentBackground = enabled;
   const tolerance = normalizeExportBackgroundTolerance(state.exportWizardBackgroundTolerance);
+  const protection = normalizeExportBackgroundProtection(state.exportWizardBackgroundProtection);
   state.exportWizardBackgroundTolerance = tolerance;
+  state.exportWizardBackgroundProtection = protection;
   if (elements.exportTransparentBgBtn instanceof HTMLButtonElement) {
     elements.exportTransparentBgBtn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
     elements.exportTransparentBgBtn.setAttribute(
       'aria-label',
       enabled ? 'Fondo transparente activo' : 'Fondo transparente'
     );
-    elements.exportTransparentBgBtn.title = enabled ? `Fondo transparente ${tolerance}` : 'Fondo transparente';
+    elements.exportTransparentBgBtn.title = enabled
+      ? `Fondo transparente ${tolerance} · Protección ${protection}`
+      : 'Fondo transparente';
   }
   const transparentControl = elements.exportTransparentBgBtn?.parentElement;
   if (transparentControl instanceof HTMLElement) {
@@ -1529,6 +1619,21 @@ function updateExportTransparentBackgroundUi() {
   if (elements.exportTransparentBgToleranceValue instanceof HTMLElement) {
     elements.exportTransparentBgToleranceValue.textContent = String(tolerance);
   }
+  if (elements.exportTransparentBgProtectionSlider instanceof HTMLElement) {
+    const ratio = EXPORT_BACKGROUND_PROTECTION_MAX > 0 ? protection / EXPORT_BACKGROUND_PROTECTION_MAX : 0;
+    const percent = Math.max(0, Math.min(100, ratio * 100));
+    elements.exportTransparentBgProtectionSlider.setAttribute('aria-valuenow', String(protection));
+    elements.exportTransparentBgProtectionSlider.setAttribute('aria-valuetext', String(protection));
+    if (elements.exportTransparentBgProtectionSliderFill instanceof HTMLElement) {
+      elements.exportTransparentBgProtectionSliderFill.style.height = `${percent}%`;
+    }
+    if (elements.exportTransparentBgProtectionSliderThumb instanceof HTMLElement) {
+      elements.exportTransparentBgProtectionSliderThumb.style.bottom = `${percent}%`;
+    }
+  }
+  if (elements.exportTransparentBgProtectionValue instanceof HTMLElement) {
+    elements.exportTransparentBgProtectionValue.textContent = String(protection);
+  }
   logExportTransparentDebug('ui sync');
 }
 
@@ -1537,7 +1642,8 @@ function getCurrentExportEditOptions() {
     cropEnabled: state.exportWizardCropEnabled === true,
     cropRect: clampExportCropRect(state.exportWizardCropRect),
     transparentBackground: state.exportWizardTransparentBackground === true,
-    backgroundTolerance: normalizeExportBackgroundTolerance(state.exportWizardBackgroundTolerance)
+    backgroundTolerance: normalizeExportBackgroundTolerance(state.exportWizardBackgroundTolerance),
+    backgroundProtection: normalizeExportBackgroundProtection(state.exportWizardBackgroundProtection)
   };
 }
 
@@ -1602,7 +1708,9 @@ function resolveRecommendationCacheKey(item, format, preset, editOptions = {}) {
   const editSignature = [
     editOptions.cropEnabled === true ? 'crop' : 'full',
     `${Math.round(rect.x * 100)}-${Math.round(rect.y * 100)}-${Math.round(rect.width * 100)}-${Math.round(rect.height * 100)}`,
-    editOptions.transparentBackground === true ? `alpha-${normalizeExportBackgroundTolerance(editOptions.backgroundTolerance)}` : 'opaque'
+    editOptions.transparentBackground === true
+      ? `alpha-${normalizeExportBackgroundTolerance(editOptions.backgroundTolerance)}-${normalizeExportBackgroundProtection(editOptions.backgroundProtection)}`
+      : 'opaque'
   ].join('|');
   return `${sourceSignature}|${safeFormat}|${safePreset}|${editSignature}`;
 }
@@ -1860,7 +1968,8 @@ async function estimateRecommendedCompressionForItem(item, options = {}) {
     cropEnabled: options.cropEnabled === true,
     cropRect: options.cropRect,
     transparentBackground: options.transparentBackground === true,
-    backgroundTolerance: options.backgroundTolerance
+    backgroundTolerance: options.backgroundTolerance,
+    backgroundProtection: options.backgroundProtection
   };
   const format = resolveEffectiveExportFormat(options.format || state.exportWizardFormat, preset, editOptions);
   const targetSize = resolveExportPreviewTargetSize(item, preset, editOptions);
@@ -2074,7 +2183,9 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardCropInteraction = null;
   state.exportWizardTransparentBackground = false;
   state.exportWizardBackgroundTolerance = EXPORT_BACKGROUND_TOLERANCE_DEFAULT;
+  state.exportWizardBackgroundProtection = EXPORT_BACKGROUND_PROTECTION_DEFAULT;
   state.exportWizardTransparentAdjusting = false;
+  state.exportWizardTransparentAdjustingControl = '';
   state.exportWizardTransparentPointerId = null;
   state.exportWizardRecommendationToken += 1;
   state.exportWizardBusy = false;
@@ -2188,7 +2299,9 @@ function closeExportWizardModal() {
   state.exportWizardCropInteraction = null;
   state.exportWizardTransparentBackground = false;
   state.exportWizardBackgroundTolerance = EXPORT_BACKGROUND_TOLERANCE_DEFAULT;
+  state.exportWizardBackgroundProtection = EXPORT_BACKGROUND_PROTECTION_DEFAULT;
   state.exportWizardTransparentAdjusting = false;
+  state.exportWizardTransparentAdjustingControl = '';
   state.exportWizardTransparentPointerId = null;
   state.exportWizardBusy = false;
   setExportRecommendedCompression(null);
@@ -2406,7 +2519,8 @@ async function renderImageExportAsset(dataUrl, options = {}) {
     cropEnabled: options.cropEnabled === true,
     cropRect: options.cropRect,
     transparentBackground: options.transparentBackground === true,
-    backgroundTolerance: options.backgroundTolerance
+    backgroundTolerance: options.backgroundTolerance,
+    backgroundProtection: options.backgroundProtection
   });
   const blob = await encodeCanvasToExportBlob(canvas, {
     format,
@@ -2473,7 +2587,10 @@ function buildExportCanvasFromImage(image, options = {}) {
   sourceCtx.drawImage(image, cropLeft, cropTop, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
 
   if (options.transparentBackground === true && format !== 'image/jpeg') {
-    removeBackgroundFromCanvas(sourceCanvas, normalizeExportBackgroundTolerance(options.backgroundTolerance));
+    removeBackgroundFromCanvas(sourceCanvas, {
+      tolerance: normalizeExportBackgroundTolerance(options.backgroundTolerance),
+      protection: normalizeExportBackgroundProtection(options.backgroundProtection)
+    });
   }
 
   if (maxEdge > 0) {
@@ -2515,7 +2632,7 @@ function buildExportCanvasFromImage(image, options = {}) {
   return canvas;
 }
 
-function removeBackgroundFromCanvas(canvas, tolerance) {
+function removeBackgroundFromCanvas(canvas, options = {}) {
   const width = Math.max(1, Number(canvas?.width) || 1);
   const height = Math.max(1, Number(canvas?.height) || 1);
   const ctx = canvas.getContext('2d');
@@ -2524,7 +2641,8 @@ function removeBackgroundFromCanvas(canvas, tolerance) {
   }
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
-  const safeTolerance = normalizeExportBackgroundTolerance(tolerance);
+  const safeTolerance = normalizeExportBackgroundTolerance(options.tolerance);
+  const safeProtection = normalizeExportBackgroundProtection(options.protection);
   if (safeTolerance <= 0) {
     return;
   }
@@ -2571,12 +2689,111 @@ function removeBackgroundFromCanvas(canvas, tolerance) {
     head += 1;
     const x = pixelIndex % width;
     const y = Math.floor(pixelIndex / width);
-    const dataIndex = pixelIndex * 4;
-    data[dataIndex + 3] = 0;
     enqueue(x - 1, y);
     enqueue(x + 1, y);
     enqueue(x, y - 1);
     enqueue(x, y + 1);
+  }
+
+  const protectionRadius =
+    safeProtection <= 0
+      ? 0
+      : Math.max(1, Math.round((Math.min(width, height) * 0.18) * (safeProtection / EXPORT_BACKGROUND_PROTECTION_MAX)));
+
+  if (protectionRadius <= 0) {
+    for (let pixelIndex = 0; pixelIndex < visited.length; pixelIndex += 1) {
+      if (visited[pixelIndex] !== 1) {
+        continue;
+      }
+      data[(pixelIndex * 4) + 3] = 0;
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return;
+  }
+
+  const distances = new Int32Array(width * height);
+  distances.fill(-1);
+  const contourQueue = new Uint32Array(width * height);
+  let contourHead = 0;
+  let contourTail = 0;
+  const contourOffsets = [
+    [-1, -1], [0, -1], [1, -1],
+    [-1, 0],           [1, 0],
+    [-1, 1],  [0, 1],  [1, 1]
+  ];
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const pixelIndex = y * width + x;
+      if (visited[pixelIndex] !== 1) {
+        continue;
+      }
+      let touchesForeground = false;
+      for (const [dx, dy] of contourOffsets) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+          continue;
+        }
+        const neighborIndex = (ny * width) + nx;
+        if (visited[neighborIndex] !== 1) {
+          touchesForeground = true;
+          break;
+        }
+      }
+      if (!touchesForeground) {
+        continue;
+      }
+      distances[pixelIndex] = 0;
+      contourQueue[contourTail] = pixelIndex;
+      contourTail += 1;
+    }
+  }
+
+  if (contourTail === 0) {
+    for (let pixelIndex = 0; pixelIndex < visited.length; pixelIndex += 1) {
+      if (visited[pixelIndex] !== 1) {
+        continue;
+      }
+      data[(pixelIndex * 4) + 3] = 0;
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return;
+  }
+
+  while (contourHead < contourTail) {
+    const pixelIndex = contourQueue[contourHead];
+    contourHead += 1;
+    const distance = distances[pixelIndex];
+    if (distance >= protectionRadius) {
+      continue;
+    }
+    const x = pixelIndex % width;
+    const y = Math.floor(pixelIndex / width);
+    for (const [dx, dy] of contourOffsets) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+        continue;
+      }
+      const neighborIndex = (ny * width) + nx;
+      if (visited[neighborIndex] !== 1 || distances[neighborIndex] !== -1) {
+        continue;
+      }
+      distances[neighborIndex] = distance + 1;
+      contourQueue[contourTail] = neighborIndex;
+      contourTail += 1;
+    }
+  }
+
+  for (let pixelIndex = 0; pixelIndex < visited.length; pixelIndex += 1) {
+    if (visited[pixelIndex] !== 1) {
+      continue;
+    }
+    if (distances[pixelIndex] >= 0 && distances[pixelIndex] < protectionRadius) {
+      continue;
+    }
+    data[(pixelIndex * 4) + 3] = 0;
   }
 
   ctx.putImageData(imageData, 0, 0);
