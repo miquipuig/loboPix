@@ -2556,7 +2556,7 @@ select:disabled {
 .export-crop-toolbar-btn {
   position: absolute;
   top: 14px;
-  left: 14px;
+  left: 10px;
   z-index: 4;
   width: 34px;
   height: 34px;
@@ -2600,7 +2600,7 @@ select:disabled {
 .export-transparent-control {
   position: absolute;
   top: 56px;
-  left: 14px;
+  left: 10px;
   z-index: 40;
 }
 
@@ -2612,12 +2612,12 @@ select:disabled {
 
 .export-floating-control {
   position: absolute;
-  left: 26px;
+  left: 38px;
   top: 50%;
   z-index: 60;
   transform: translateY(-50%);
   width: 56px;
-  padding: 8px 5px 6px;
+  padding: 6px 5px 5px;
   border: 1px solid rgba(148, 163, 184, 0.3);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.92);
@@ -2628,7 +2628,8 @@ select:disabled {
   transition: opacity 0.14s ease;
 }
 
-.export-transparent-control.open .export-floating-control,
+.export-transparent-control.active:hover .export-floating-control,
+.export-transparent-control.active:focus-within .export-floating-control,
 .export-transparent-control.adjusting .export-floating-control {
   opacity: 1;
   pointer-events: auto;
@@ -2637,7 +2638,7 @@ select:disabled {
 .export-transparent-slider {
   position: relative;
   width: 14px;
-  height: 122px;
+  height: 94px;
   cursor: pointer;
   touch-action: none;
   outline: none;

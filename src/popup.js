@@ -128,7 +128,6 @@ const state = {
   exportWizardTransparentBackground: false,
   exportWizardBackgroundTolerance: EXPORT_BACKGROUND_TOLERANCE_DEFAULT,
   exportWizardBackgroundProtection: EXPORT_BACKGROUND_PROTECTION_DEFAULT,
-  exportWizardTransparentPopoverOpen: false,
   exportWizardTransparentAdjusting: false,
   exportWizardTransparentAdjustingControl: '',
   exportWizardTransparentPointerId: null,
@@ -331,16 +330,15 @@ function bindEvents() {
   }
   if (elements.exportTransparentBgBtn instanceof HTMLButtonElement) {
     elements.exportTransparentBgBtn.addEventListener('click', () => {
-      const shouldOpen = state.exportWizardTransparentPopoverOpen !== true;
-      state.exportWizardTransparentPopoverOpen = shouldOpen;
-      if (shouldOpen) {
+      const shouldEnable = state.exportWizardTransparentBackground !== true;
+      if (shouldEnable) {
         setExportTransparentTolerance(EXPORT_BACKGROUND_TOLERANCE_ACTIVE_DEFAULT);
         setExportTransparentProtection(EXPORT_BACKGROUND_PROTECTION_ACTIVE_DEFAULT);
       } else {
         setExportTransparentTolerance(0);
-        setExportTransparentProtection(EXPORT_BACKGROUND_PROTECTION_ACTIVE_DEFAULT);
+        setExportTransparentProtection(EXPORT_BACKGROUND_PROTECTION_DEFAULT);
       }
-      logExportTransparentDebug('button click', { open: shouldOpen });
+      logExportTransparentDebug('button click', { enabled: shouldEnable });
       syncExportFormatControlState();
       updateExportTransparentBackgroundUi();
       void refreshExportWizardPreview();
@@ -1606,13 +1604,13 @@ function updateExportTransparentBackgroundUi() {
   }
   const transparentControl = elements.exportTransparentBgBtn?.parentElement;
   if (transparentControl instanceof HTMLElement) {
+    transparentControl.classList.toggle('active', enabled);
     transparentControl.classList.toggle('adjusting', state.exportWizardTransparentAdjusting === true);
-    transparentControl.classList.toggle('open', state.exportWizardTransparentPopoverOpen === true);
   }
   if (elements.exportTransparentBgPopover instanceof HTMLElement) {
     elements.exportTransparentBgPopover.setAttribute(
       'aria-hidden',
-      state.exportWizardTransparentPopoverOpen === true ? 'false' : 'true'
+      enabled ? 'false' : 'true'
     );
   }
   if (elements.exportTransparentBgSlider instanceof HTMLElement) {
@@ -2195,7 +2193,6 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardTransparentBackground = false;
   state.exportWizardBackgroundTolerance = EXPORT_BACKGROUND_TOLERANCE_DEFAULT;
   state.exportWizardBackgroundProtection = EXPORT_BACKGROUND_PROTECTION_DEFAULT;
-  state.exportWizardTransparentPopoverOpen = false;
   state.exportWizardTransparentAdjusting = false;
   state.exportWizardTransparentAdjustingControl = '';
   state.exportWizardTransparentPointerId = null;
@@ -2312,7 +2309,6 @@ function closeExportWizardModal() {
   state.exportWizardTransparentBackground = false;
   state.exportWizardBackgroundTolerance = EXPORT_BACKGROUND_TOLERANCE_DEFAULT;
   state.exportWizardBackgroundProtection = EXPORT_BACKGROUND_PROTECTION_DEFAULT;
-  state.exportWizardTransparentPopoverOpen = false;
   state.exportWizardTransparentAdjusting = false;
   state.exportWizardTransparentAdjustingControl = '';
   state.exportWizardTransparentPointerId = null;
