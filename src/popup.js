@@ -4,6 +4,12 @@ const STORAGE_KEY_MANUAL_LIBRARY = 'manualImageLibrary';
 const STORAGE_KEY_DOMAIN_GALLERIES = 'domainImageGalleries';
 const MAX_MANUAL_IMAGES = 80;
 const MANUAL_GALLERY_ID = 'manual-gallery';
+const EXPORT_PRESET_ORIGINAL = 'original';
+const EXPORT_PRESET_FAVICON = 'favicon';
+const EXPORT_DEFAULT_FORMAT = 'image/webp';
+const EXPORT_DEFAULT_QUALITY = 0.82;
+const EXPORT_FAVICON_QUALITY = 1;
+const FAVICON_PRESET_SIZES = [16, 32, 48, 64, 128, 180, 192, 256, 512];
 
 const elements = {
   popupRoot: document.getElementById('popupRoot'),
@@ -39,6 +45,16 @@ const elements = {
   manualUploadNameInput: document.getElementById('manualUploadNameInput'),
   manualUploadCancelBtn: document.getElementById('manualUploadCancelBtn'),
   manualUploadConfirmBtn: document.getElementById('manualUploadConfirmBtn'),
+  exportWizardModal: document.getElementById('exportWizardModal'),
+  exportWizardSourceName: document.getElementById('exportWizardSourceName'),
+  exportWizardNameInput: document.getElementById('exportWizardNameInput'),
+  exportWizardPreviewImg: document.getElementById('exportWizardPreviewImg'),
+  exportWizardOriginalMeta: document.getElementById('exportWizardOriginalMeta'),
+  exportWizardPreviewMeta: document.getElementById('exportWizardPreviewMeta'),
+  exportFormatSelect: document.getElementById('exportFormatSelect'),
+  exportPresetSelect: document.getElementById('exportPresetSelect'),
+  exportWizardCancelBtn: document.getElementById('exportWizardCancelBtn'),
+  exportWizardDownloadBtn: document.getElementById('exportWizardDownloadBtn'),
   aboutVersion: document.getElementById('aboutVersion'),
   aboutSignatureTitle: document.getElementById('aboutSignatureTitle'),
   feedbackToast: document.getElementById('feedbackToast'),
@@ -62,6 +78,12 @@ const state = {
   thumbnailColumns: 4,
   pendingManualUploadFiles: [],
   pendingManualUploadTarget: null,
+  exportWizardItem: null,
+  exportWizardFormat: EXPORT_DEFAULT_FORMAT,
+  exportWizardPreset: EXPORT_PRESET_ORIGINAL,
+  exportWizardPreviewUrl: '',
+  exportWizardPreviewToken: 0,
+  exportWizardBusy: false,
   toastTimer: null,
   fileDragDepth: 0,
   fileDragActive: false
@@ -196,6 +218,55 @@ function bindEvents() {
     });
   }
 
+  if (elements.exportWizardCancelBtn instanceof HTMLButtonElement) {
+    elements.exportWizardCancelBtn.addEventListener('click', () => {
+      closeExportWizardModal();
+    });
+  }
+
+  if (elements.exportWizardNameInput instanceof HTMLInputElement) {
+    elements.exportWizardNameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeExportWizardModal();
+        return;
+      }
+      if (event.key !== 'Enter') {
+        return;
+      }
+      event.preventDefault();
+      void exportWizardDownload();
+    });
+  }
+
+  if (elements.exportWizardDownloadBtn instanceof HTMLButtonElement) {
+    elements.exportWizardDownloadBtn.addEventListener('click', () => {
+      void exportWizardDownload();
+    });
+  }
+
+  if (elements.exportFormatSelect instanceof HTMLSelectElement) {
+    elements.exportFormatSelect.addEventListener('change', () => {
+      state.exportWizardFormat = normalizeExportFormat(elements.exportFormatSelect.value);
+      void refreshExportWizardPreview();
+    });
+  }
+
+  if (elements.exportPresetSelect instanceof HTMLSelectElement) {
+    elements.exportPresetSelect.addEventListener('change', () => {
+      state.exportWizardPreset = normalizeExportPreset(elements.exportPresetSelect.value);
+      void refreshExportWizardPreview();
+    });
+  }
+
+  if (elements.exportWizardModal instanceof HTMLElement) {
+    elements.exportWizardModal.addEventListener('click', (event) => {
+      if (event.target === elements.exportWizardModal) {
+        closeExportWizardModal();
+      }
+    });
+  }
+
   if (elements.galleryBackBtn instanceof HTMLButtonElement) {
     elements.galleryBackBtn.addEventListener('click', () => {
       state.galleryListMode = 'list';
@@ -270,6 +341,19 @@ function bindEvents() {
       state.galleryListMode = 'list';
       state.activeGalleryId = '';
       renderActiveLogoLibraryGrid();
+      return;
+    }
+
+    const exportButton = target.closest('button[data-image-export-id]');
+    if (exportButton && !exportButton.disabled) {
+      event.preventDefault();
+      event.stopPropagation();
+      const imageId = String(exportButton.dataset.imageExportId || '').trim();
+      const manual = exportButton.dataset.imageExportManual === '1';
+      const galleryId = String(exportButton.dataset.imageExportGalleryId || '').trim();
+      if (imageId) {
+        openExportWizardFromImageId(imageId, { manual, galleryId });
+      }
       return;
     }
 
@@ -458,6 +542,7 @@ function setActivePage(page) {
     renderActiveLogoLibraryGrid();
     return;
   }
+  closeExportWizardModal();
   updateUploadButtonVisibility();
   updateSaveGalleryFabVisibility();
   updateSelectAllWebButtonState();
@@ -543,6 +628,7 @@ function openSaveAsModal() {
     return;
   }
   closeManualUploadModal();
+  closeExportWizardModal();
   const defaultName = getDefaultSaveAsGalleryName();
   elements.saveAsNameInput.value = defaultName;
   elements.saveAsModal.classList.remove('hidden');
@@ -595,6 +681,7 @@ function openManualUploadModal() {
   }
 
   closeSaveAsModal();
+  closeExportWizardModal();
   populateManualUploadGallerySelect();
   elements.manualUploadGallerySelect.value = '';
   elements.manualUploadNameInput.value = '';
@@ -685,6 +772,414 @@ function buildManualUploadTargetFromModal() {
     mode: 'new',
     name: customName
   };
+}
+
+function normalizeExportFormat(value) {
+  const safe = String(value || '').trim().toLowerCase();
+  if (safe === 'image/png') {
+    return 'image/png';
+  }
+  if (safe === 'image/jpeg' || safe === 'image/jpg') {
+    return 'image/jpeg';
+  }
+  return 'image/webp';
+}
+
+function normalizeExportPreset(value) {
+  const safe = String(value || '').trim().toLowerCase();
+  return safe === EXPORT_PRESET_FAVICON ? EXPORT_PRESET_FAVICON : EXPORT_PRESET_ORIGINAL;
+}
+
+function resolveExportQuality(format, preset) {
+  const safeFormat = normalizeExportFormat(format);
+  if (safeFormat !== 'image/jpeg' && safeFormat !== 'image/webp') {
+    return undefined;
+  }
+  const safePreset = normalizeExportPreset(preset);
+  return safePreset === EXPORT_PRESET_FAVICON ? EXPORT_FAVICON_QUALITY : EXPORT_DEFAULT_QUALITY;
+}
+
+function openExportWizardFromImageId(imageId, options = {}) {
+  const item = findExportSourceItem(imageId, options);
+  if (!item?.dataUrl) {
+    showFeedbackToast('No s\'ha pogut obrir export wizard', 'error');
+    return;
+  }
+  const itemName = sanitizeDisplayName(item.name || extractFileNameFromItemSource(item) || 'Imatge', 'Imatge');
+
+  state.exportWizardItem = {
+    id: String(item.id || '').trim(),
+    name: itemName,
+    dataUrl: String(item.dataUrl || ''),
+    sourceUrl: String(item.sourceUrl || '').trim(),
+    sourcePath: String(item.sourcePath || '').trim(),
+    fileSize: Math.max(0, Number(item.fileSize) || 0),
+    width: Math.max(0, Number(item.width) || 0),
+    height: Math.max(0, Number(item.height) || 0)
+  };
+  state.exportWizardFormat = EXPORT_DEFAULT_FORMAT;
+  state.exportWizardPreset = EXPORT_PRESET_ORIGINAL;
+  state.exportWizardBusy = false;
+
+  if (elements.exportFormatSelect instanceof HTMLSelectElement) {
+    elements.exportFormatSelect.value = state.exportWizardFormat;
+  }
+  if (elements.exportPresetSelect instanceof HTMLSelectElement) {
+    elements.exportPresetSelect.value = state.exportWizardPreset;
+  }
+  if (elements.exportWizardSourceName instanceof HTMLElement) {
+    elements.exportWizardSourceName.textContent = itemName;
+  }
+  if (elements.exportWizardNameInput instanceof HTMLInputElement) {
+    const suggested = sanitizeArchiveName(removeFileExtension(getExportSourceName(state.exportWizardItem))) || 'export';
+    elements.exportWizardNameInput.value = suggested;
+  }
+  if (elements.exportWizardOriginalMeta instanceof HTMLElement) {
+    const fileSize = state.exportWizardItem.fileSize || getDataUrlByteLength(state.exportWizardItem.dataUrl);
+    const dims =
+      state.exportWizardItem.width > 0 && state.exportWizardItem.height > 0
+        ? `${state.exportWizardItem.width}x${state.exportWizardItem.height}`
+        : '?x?';
+    elements.exportWizardOriginalMeta.textContent = `Original: ${dims}px · ${formatBytes(fileSize)}`;
+  }
+  if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
+    elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
+  }
+  if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
+    elements.exportWizardPreviewImg.removeAttribute('src');
+  }
+
+  closeSaveAsModal();
+  closeManualUploadModal();
+  if (!(elements.exportWizardModal instanceof HTMLElement)) {
+    return;
+  }
+  elements.exportWizardModal.classList.remove('hidden');
+  elements.exportWizardModal.setAttribute('aria-hidden', 'false');
+  if (elements.exportWizardNameInput instanceof HTMLInputElement) {
+    window.requestAnimationFrame(() => {
+      elements.exportWizardNameInput.focus();
+      elements.exportWizardNameInput.select();
+    });
+  }
+  void refreshExportWizardPreview();
+}
+
+function findExportSourceItem(imageId, options = {}) {
+  const safeId = String(imageId || '').trim();
+  if (!safeId) {
+    return null;
+  }
+
+  const galleryId = String(options.galleryId || '').trim();
+  if (galleryId) {
+    if (galleryId === MANUAL_GALLERY_ID) {
+      return state.manualItems.find((item) => String(item?.id || '').trim() === safeId) || null;
+    }
+    const gallery = state.savedGalleries.find((entry) => String(entry?.id || '').trim() === galleryId);
+    if (!gallery || !Array.isArray(gallery.items)) {
+      return null;
+    }
+    return gallery.items.find((item) => String(item?.id || '').trim() === safeId) || null;
+  }
+
+  if (options.manual) {
+    return state.manualItems.find((item) => String(item?.id || '').trim() === safeId) || null;
+  }
+
+  const fromWeb = state.webItems.find((item) => String(item?.id || '').trim() === safeId);
+  if (fromWeb) {
+    return fromWeb;
+  }
+
+  for (const gallery of state.savedGalleries) {
+    if (!Array.isArray(gallery.items)) {
+      continue;
+    }
+    const found = gallery.items.find((item) => String(item?.id || '').trim() === safeId);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+function closeExportWizardModal() {
+  if (elements.exportWizardModal instanceof HTMLElement) {
+    elements.exportWizardModal.classList.add('hidden');
+    elements.exportWizardModal.setAttribute('aria-hidden', 'true');
+  }
+  if (state.exportWizardPreviewUrl) {
+    URL.revokeObjectURL(state.exportWizardPreviewUrl);
+  }
+  state.exportWizardPreviewUrl = '';
+  state.exportWizardItem = null;
+  state.exportWizardPreviewToken += 1;
+  state.exportWizardBusy = false;
+  if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
+    elements.exportWizardPreviewImg.removeAttribute('src');
+  }
+}
+
+async function refreshExportWizardPreview() {
+  if (!state.exportWizardItem?.dataUrl) {
+    return;
+  }
+
+  const token = state.exportWizardPreviewToken + 1;
+  state.exportWizardPreviewToken = token;
+  if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
+    elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
+  }
+
+  const format = normalizeExportFormat(state.exportWizardFormat);
+  const preset = normalizeExportPreset(state.exportWizardPreset);
+  const previewSize = preset === EXPORT_PRESET_FAVICON ? 128 : 0;
+  const quality = resolveExportQuality(format, preset);
+
+  try {
+    const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
+      format,
+      targetSize: previewSize,
+      quality
+    });
+    if (token !== state.exportWizardPreviewToken) {
+      return;
+    }
+
+    const nextUrl = URL.createObjectURL(asset.blob);
+    if (state.exportWizardPreviewUrl) {
+      URL.revokeObjectURL(state.exportWizardPreviewUrl);
+    }
+    state.exportWizardPreviewUrl = nextUrl;
+
+    if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
+      elements.exportWizardPreviewImg.src = nextUrl;
+    }
+    if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
+      const formatLabel = exportFormatLabel(format);
+      const presetLabel =
+        preset === EXPORT_PRESET_FAVICON
+          ? 'Preset favicon (exporta ZIP amb totes les mides)'
+          : 'Mida original';
+      elements.exportWizardPreviewMeta.textContent =
+        `Preview ${asset.width}x${asset.height}px · ${formatLabel} · ${formatBytes(asset.blob.size)} · ${presetLabel}`;
+    }
+  } catch (error) {
+    if (token !== state.exportWizardPreviewToken) {
+      return;
+    }
+    console.error('Export preview failed', error);
+    if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
+      elements.exportWizardPreviewMeta.textContent = 'No s\'ha pogut generar la previsualitzacio';
+    }
+  }
+}
+
+async function exportWizardDownload() {
+  if (state.exportWizardBusy || !state.exportWizardItem?.dataUrl) {
+    return;
+  }
+  const baseName = getExportWizardBaseName();
+  if (!baseName) {
+    showFeedbackToast('Escriu un nom valid per exportar', 'error');
+    if (elements.exportWizardNameInput instanceof HTMLInputElement) {
+      elements.exportWizardNameInput.focus();
+      elements.exportWizardNameInput.select();
+    }
+    return;
+  }
+
+  state.exportWizardBusy = true;
+  if (elements.exportWizardDownloadBtn instanceof HTMLButtonElement) {
+    elements.exportWizardDownloadBtn.disabled = true;
+  }
+
+  const format = normalizeExportFormat(state.exportWizardFormat);
+  const preset = normalizeExportPreset(state.exportWizardPreset);
+  const quality = resolveExportQuality(format, preset);
+  const extension = exportExtensionFromFormat(format);
+
+  try {
+    if (preset === EXPORT_PRESET_FAVICON) {
+      const entries = [];
+      for (const size of FAVICON_PRESET_SIZES) {
+        const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
+          format,
+          targetSize: Number(size) || 0,
+          quality
+        });
+        const bytes = new Uint8Array(await asset.blob.arrayBuffer());
+        entries.push({
+          name: `${baseName}-${size}x${size}.${extension}`,
+          bytes
+        });
+      }
+      const zipBlob = createZipBlob(entries);
+      await downloadBlobAsset(zipBlob, `${baseName}-favicon-pack.zip`);
+      showFeedbackToast(`Export ZIP favicon (${FAVICON_PRESET_SIZES.length} mides)`);
+      return;
+    }
+
+    const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
+      format,
+      targetSize: 0,
+      quality
+    });
+    await downloadBlobAsset(asset.blob, `${baseName}.${extension}`);
+    showFeedbackToast('Imatge exportada');
+  } catch (error) {
+    console.error('Export wizard failed', error);
+    showFeedbackToast('No s\'ha pogut exportar la imatge', 'error');
+  } finally {
+    state.exportWizardBusy = false;
+    if (elements.exportWizardDownloadBtn instanceof HTMLButtonElement) {
+      elements.exportWizardDownloadBtn.disabled = false;
+    }
+  }
+}
+
+function getExportSourceName(item) {
+  const sourceName = extractFileNameFromItemSource(item);
+  if (sourceName) {
+    return sourceName;
+  }
+  return sanitizeDisplayName(item?.name || 'imatge', 'imatge');
+}
+
+function getExportWizardBaseName() {
+  if (!(elements.exportWizardNameInput instanceof HTMLInputElement)) {
+    return '';
+  }
+  const raw = String(elements.exportWizardNameInput.value || '').trim();
+  return sanitizeArchiveName(removeFileExtension(raw));
+}
+
+async function renderImageExportAsset(dataUrl, options = {}) {
+  const source = String(dataUrl || '').trim();
+  if (!source.startsWith('data:image/')) {
+    throw new Error('invalid_export_source');
+  }
+
+  const format = normalizeExportFormat(options.format || EXPORT_DEFAULT_FORMAT);
+  const targetSize = Math.max(0, Math.round(Number(options.targetSize) || 0));
+  const image = await loadImage(source);
+  const sourceWidth = Math.max(1, Number(image.naturalWidth) || 1);
+  const sourceHeight = Math.max(1, Number(image.naturalHeight) || 1);
+  const width = targetSize > 0 ? targetSize : sourceWidth;
+  const height = targetSize > 0 ? targetSize : sourceHeight;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('canvas_context_unavailable');
+  }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  if (format === 'image/jpeg') {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+  } else {
+    ctx.clearRect(0, 0, width, height);
+  }
+
+  if (targetSize > 0) {
+    const scale = Math.min(width / sourceWidth, height / sourceHeight);
+    const drawWidth = Math.max(1, Math.round(sourceWidth * scale));
+    const drawHeight = Math.max(1, Math.round(sourceHeight * scale));
+    const drawX = Math.round((width - drawWidth) / 2);
+    const drawY = Math.round((height - drawHeight) / 2);
+    ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+  } else {
+    ctx.drawImage(image, 0, 0, width, height);
+  }
+
+  const needsQuality = format === 'image/jpeg' || format === 'image/webp';
+  const requestedQuality = Number(options.quality);
+  const quality = needsQuality
+    ? Number.isFinite(requestedQuality)
+      ? Math.min(1, Math.max(0, requestedQuality))
+      : EXPORT_DEFAULT_QUALITY
+    : undefined;
+  const blob = await canvasToBlobAsync(canvas, format, quality);
+  return { blob, width, height };
+}
+
+function canvasToBlobAsync(canvas, format, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+          return;
+        }
+        reject(new Error('canvas_blob_failed'));
+      },
+      format,
+      quality
+    );
+  });
+}
+
+function exportExtensionFromFormat(format) {
+  const safe = normalizeExportFormat(format);
+  if (safe === 'image/png') {
+    return 'png';
+  }
+  if (safe === 'image/jpeg') {
+    return 'jpg';
+  }
+  return 'webp';
+}
+
+function exportFormatLabel(format) {
+  const safe = normalizeExportFormat(format);
+  if (safe === 'image/png') {
+    return 'PNG';
+  }
+  if (safe === 'image/jpeg') {
+    return 'JPG';
+  }
+  return 'WebP';
+}
+
+async function downloadBlobAsset(blob, filename) {
+  if (!(blob instanceof Blob) || blob.size <= 0) {
+    throw new Error('invalid_blob_download');
+  }
+  const safeFilename = String(filename || '').trim() || `export-${Date.now()}`;
+  const objectUrl = URL.createObjectURL(blob);
+
+  try {
+    if (chrome?.downloads?.download) {
+      await chrome.downloads.download({
+        url: objectUrl,
+        filename: safeFilename,
+        saveAs: true
+      });
+      return;
+    }
+
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = safeFilename;
+    anchor.click();
+  } finally {
+    window.setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
+    }, 60_000);
+  }
+}
+
+function removeFileExtension(name) {
+  const safe = String(name || '').trim();
+  if (!safe) {
+    return '';
+  }
+  return safe.replace(/\.[a-z0-9]{2,8}$/iu, '');
 }
 
 function updateUploadButtonVisibility() {
@@ -1166,6 +1661,11 @@ function decodeDataUrlToBytes(dataUrl) {
   }
 }
 
+function getDataUrlByteLength(dataUrl) {
+  const bytes = decodeDataUrlToBytes(dataUrl);
+  return bytes ? bytes.length : 0;
+}
+
 function buildGalleryArchiveFileName(gallerySnapshot) {
   const fallback = `galeria-${Date.now()}.zip`;
   const name = sanitizeArchiveName(gallerySnapshot?.name || '');
@@ -1461,6 +1961,17 @@ function formatGallerySizeMb(bytes) {
   return `${megaBytes.toFixed(2)} MB`;
 }
 
+function formatBytes(bytes) {
+  const safe = Math.max(0, Number(bytes) || 0);
+  if (safe < 1024) {
+    return `${safe} B`;
+  }
+  if (safe < 1024 * 1024) {
+    return `${(safe / 1024).toFixed(1)} KB`;
+  }
+  return `${(safe / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 function getGalleryDisplayName(gallery) {
   const rawName = String(gallery?.name || '').trim();
   if (rawName) {
@@ -1524,6 +2035,11 @@ function createStoredGalleryCard(item, galleryId) {
   deleteButton.title = 'Eliminar imatge';
   deleteButton.innerHTML = '<i class="bi bi-trash3" aria-hidden="true"></i>';
   card.appendChild(deleteButton);
+
+  const exportButton = createImageExportButton(item, { galleryId });
+  if (exportButton) {
+    card.appendChild(exportButton);
+  }
 
   return card;
 }
@@ -1597,7 +2113,38 @@ function createImageCard(item, options = {}) {
     card.appendChild(highlightButton);
   }
 
+  const exportButton = createImageExportButton(item, {
+    manual: Boolean(options.manual),
+    galleryId: options.manual ? MANUAL_GALLERY_ID : ''
+  });
+  if (exportButton) {
+    card.appendChild(exportButton);
+  }
+
   return card;
+}
+
+function createImageExportButton(item, options = {}) {
+  const imageId = String(item?.id || '').trim();
+  if (!imageId) {
+    return null;
+  }
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'logo-library-item-export';
+  button.dataset.imageExportId = imageId;
+  if (options.manual) {
+    button.dataset.imageExportManual = '1';
+  }
+  if (options.galleryId) {
+    button.dataset.imageExportGalleryId = String(options.galleryId || '').trim();
+  }
+  const imageName = String(item?.name || 'imatge');
+  button.setAttribute('aria-label', `Export wizard ${imageName}`);
+  button.title = 'Export wizard';
+  button.innerHTML = '<i class="bi bi-magic" aria-hidden="true"></i>';
+  return button;
 }
 
 function createThumbWrap(item, options = {}) {

@@ -5,18 +5,19 @@
   "default_locale": "en",
   "version": "1.0.0",
   "icons": {
-    "16": "assets/icons/loboQR-16.png",
-    "32": "assets/icons/loboQR-32.png",
-    "48": "assets/icons/loboQR-48.png",
-    "128": "assets/icons/loboQR-128.png"
+    "16": "assets/icons/lobopix-16x16.png",
+    "32": "assets/icons/lobopix-32x32.png",
+    "48": "assets/icons/lobopix-48x48.png",
+    "128": "assets/icons/lobopix-128x128.png"
   },
   "action": {
     "default_title": "lobopix",
     "default_popup": "popup.html",
     "default_icon": {
-      "16": "assets/icons/loboQR-16.png",
-      "32": "assets/icons/loboQR-32.png",
-      "48": "assets/icons/loboQR-48.png"
+      "16": "assets/icons/lobopix-16x16.png",
+      "32": "assets/icons/lobopix-32x32.png",
+      "48": "assets/icons/lobopix-48x48.png",
+      "128": "assets/icons/lobopix-128x128.png"
     }
   },
   "permissions": [

@@ -176,6 +176,35 @@
           </div>
         </div>
       </div>
+
+      <div id="exportWizardModal" class="save-as-modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="exportWizardTitle">
+        <div class="save-as-modal-card export-wizard-card">
+          <h3 id="exportWizardTitle" class="save-as-modal-title">Export wizard</h3>
+          <p id="exportWizardSourceName" class="export-wizard-source-name"></p>
+          <label for="exportWizardNameInput" class="save-as-modal-label">Nombre de exportación</label>
+          <input id="exportWizardNameInput" class="save-as-modal-input" type="text" maxlength="180" placeholder="nombre-archivo" />
+          <div class="export-wizard-preview-wrap">
+            <img id="exportWizardPreviewImg" class="export-wizard-preview-img" alt="Previsualització export" />
+          </div>
+          <p id="exportWizardOriginalMeta" class="export-wizard-meta"></p>
+          <p id="exportWizardPreviewMeta" class="export-wizard-meta"></p>
+          <label for="exportFormatSelect" class="save-as-modal-label">Selector de Formato</label>
+          <select id="exportFormatSelect" class="save-as-modal-input">
+            <option value="image/webp">WebP</option>
+            <option value="image/png">PNG</option>
+            <option value="image/jpeg">JPG</option>
+          </select>
+          <label for="exportPresetSelect" class="save-as-modal-label">Presets de Tamaño</label>
+          <select id="exportPresetSelect" class="save-as-modal-input">
+            <option value="original">Original</option>
+            <option value="favicon">Favicon (ZIP multimida)</option>
+          </select>
+          <div class="save-as-modal-actions">
+            <button id="exportWizardCancelBtn" class="btn btn-outline-secondary btn-sm" type="button">Cerrar</button>
+            <button id="exportWizardDownloadBtn" class="btn btn-primary btn-sm" type="button">Exportar</button>
+          </div>
+        </div>
+      </div>
     </main>
 
     <script src="popup.js" type="module"></script>
