@@ -185,14 +185,49 @@
           <input id="exportWizardNameInput" class="save-as-modal-input" type="text" maxlength="180" placeholder="nombre-archivo" />
           <div class="export-wizard-preview-wrap">
             <img id="exportWizardPreviewImg" class="export-wizard-preview-img" alt="Previsualització export" />
+            <button id="exportCropToggleBtn" class="export-crop-toolbar-btn" type="button" aria-label="Activar recorte" aria-pressed="false" title="Recortar">
+              <i class="bi bi-crop" aria-hidden="true"></i>
+            </button>
+            <div id="exportCropStage" class="export-crop-stage hidden" aria-hidden="true">
+              <img id="exportCropEditorImg" class="export-crop-editor-img" alt="Editor de recorte" />
+              <div id="exportCropBox" class="export-crop-box hidden">
+                <span class="export-crop-box-label">Recorte</span>
+                <span class="export-crop-handle export-crop-handle-nw" data-export-crop-handle="nw" aria-hidden="true"></span>
+                <span class="export-crop-handle export-crop-handle-ne" data-export-crop-handle="ne" aria-hidden="true"></span>
+                <span class="export-crop-handle export-crop-handle-sw" data-export-crop-handle="sw" aria-hidden="true"></span>
+                <span class="export-crop-handle export-crop-handle-se" data-export-crop-handle="se" aria-hidden="true"></span>
+                <span class="export-crop-handle export-crop-handle-n" data-export-crop-handle="n" aria-hidden="true"></span>
+                <span class="export-crop-handle export-crop-handle-e" data-export-crop-handle="e" aria-hidden="true"></span>
+                <span class="export-crop-handle export-crop-handle-s" data-export-crop-handle="s" aria-hidden="true"></span>
+                <span class="export-crop-handle export-crop-handle-w" data-export-crop-handle="w" aria-hidden="true"></span>
+              </div>
+            </div>
           </div>
-          <p id="exportWizardOriginalMeta" class="export-wizard-meta"></p>
-          <p id="exportWizardPreviewMeta" class="export-wizard-meta"></p>
+          <div class="export-wizard-meta-panel" aria-live="polite">
+            <p id="exportWizardOriginalMeta" class="export-wizard-meta"></p>
+            <p id="exportWizardPreviewMeta" class="export-wizard-meta"></p>
+          </div>
           <label for="exportPresetSelect" class="save-as-modal-label">Presets de Tamaño</label>
           <select id="exportPresetSelect" class="save-as-modal-input">
             <option value="original">Original</option>
             <option value="favicon">Favicon (ZIP multimida)</option>
           </select>
+          <div class="export-wizard-tools">
+            <section class="export-wizard-tool-group" aria-labelledby="exportTransparentBgTitle">
+              <label id="exportTransparentBgTitle" class="export-tool-toggle" for="exportTransparentBgToggle">
+                <input id="exportTransparentBgToggle" type="checkbox" />
+                <span>Fondo transparente</span>
+              </label>
+              <div id="exportTransparentBgControls" class="export-tool-panel hidden">
+                <div class="export-tool-slider-grid export-tool-slider-grid-single">
+                  <label for="exportTransparentBgToleranceRange" class="save-as-modal-label">Sensibilidad</label>
+                  <input id="exportTransparentBgToleranceRange" class="export-compression-range export-tool-range" type="range" min="0" max="120" step="1" value="20" />
+                  <span id="exportTransparentBgToleranceValue" class="export-tool-value">20</span>
+                </div>
+                <p class="export-tool-hint">Hace transparente el fondo conectado al borde. JPG se cambia a PNG si activas esta opción.</p>
+              </div>
+            </section>
+          </div>
           <div class="export-format-compression-compact">
             <label for="exportFormatSelect" class="save-as-modal-label export-format-label">Formato</label>
             <label for="exportCompressionRange" class="save-as-modal-label">Compresión</label>

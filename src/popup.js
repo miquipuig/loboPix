@@ -13,6 +13,9 @@ const EXPORT_DEFAULT_FORMAT = 'image/webp';
 const EXPORT_DEFAULT_COMPRESSION = 72;
 const EXPORT_MIN_QUALITY = 0.05;
 const EXPORT_MAX_QUALITY = 1;
+const EXPORT_CROP_MIN_RATIO = 0.05;
+const EXPORT_BACKGROUND_TOLERANCE_DEFAULT = 20;
+const EXPORT_BACKGROUND_TOLERANCE_MAX = 120;
 const ZIP_MAX_COMPRESSION_LEVEL = 9;
 const FAVICON_PRESET_SIZES = [16, 32, 48, 64, 128, 180, 192, 256, 512];
 const EXPORT_RECOMMENDATION_CANDIDATES = [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96];
@@ -62,8 +65,16 @@ const elements = {
   exportWizardSourceName: document.getElementById('exportWizardSourceName'),
   exportWizardNameInput: document.getElementById('exportWizardNameInput'),
   exportWizardPreviewImg: document.getElementById('exportWizardPreviewImg'),
+  exportCropToggleBtn: document.getElementById('exportCropToggleBtn'),
+  exportCropStage: document.getElementById('exportCropStage'),
+  exportCropEditorImg: document.getElementById('exportCropEditorImg'),
+  exportCropBox: document.getElementById('exportCropBox'),
   exportWizardOriginalMeta: document.getElementById('exportWizardOriginalMeta'),
   exportWizardPreviewMeta: document.getElementById('exportWizardPreviewMeta'),
+  exportTransparentBgToggle: document.getElementById('exportTransparentBgToggle'),
+  exportTransparentBgControls: document.getElementById('exportTransparentBgControls'),
+  exportTransparentBgToleranceRange: document.getElementById('exportTransparentBgToleranceRange'),
+  exportTransparentBgToleranceValue: document.getElementById('exportTransparentBgToleranceValue'),
   exportFormatSelect: document.getElementById('exportFormatSelect'),
   exportPresetSelect: document.getElementById('exportPresetSelect'),
   exportCompressionRange: document.getElementById('exportCompressionRange'),
@@ -101,6 +112,11 @@ const state = {
   exportWizardRecommendedCompression: null,
   exportWizardRecommendationToken: 0,
   exportWizardCompressionTouched: false,
+  exportWizardCropEnabled: false,
+  exportWizardCropRect: { x: 0, y: 0, width: 1, height: 1 },
+  exportWizardCropInteraction: null,
+  exportWizardTransparentBackground: false,
+  exportWizardBackgroundTolerance: EXPORT_BACKGROUND_TOLERANCE_DEFAULT,
   exportWizardPreviewUrl: '',
   exportWizardPreviewToken: 0,
   exportWizardBusy: false,
@@ -262,6 +278,61 @@ function bindEvents() {
   if (elements.exportWizardDownloadBtn instanceof HTMLButtonElement) {
     elements.exportWizardDownloadBtn.addEventListener('click', () => {
       void exportWizardDownload();
+    });
+  }
+
+  if (elements.exportCropToggleBtn instanceof HTMLButtonElement) {
+    elements.exportCropToggleBtn.addEventListener('click', () => {
+      const shouldEnable = state.exportWizardCropEnabled !== true;
+      state.exportWizardCropEnabled = shouldEnable;
+      if (shouldEnable && isExportCropRectFull(state.exportWizardCropRect)) {
+        state.exportWizardCropRect = createDefaultExportCropRect(state.exportWizardItem);
+      }
+      updateExportCropUi();
+      void refreshExportWizardPreview();
+      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+    });
+  }
+
+  if (elements.exportCropStage instanceof HTMLElement) {
+    elements.exportCropStage.addEventListener('pointerdown', handleExportCropPointerDown);
+  }
+
+  if (elements.exportCropEditorImg instanceof HTMLImageElement) {
+    elements.exportCropEditorImg.addEventListener('load', () => {
+      updateExportCropUi();
+    });
+  }
+
+  window.addEventListener('pointermove', handleExportCropPointerMove);
+  window.addEventListener('pointerup', handleExportCropPointerUp);
+  window.addEventListener('pointercancel', handleExportCropPointerUp);
+  window.addEventListener('resize', () => {
+    if (state.exportWizardItem) {
+      updateExportCropUi();
+    }
+  });
+
+  if (elements.exportTransparentBgToggle instanceof HTMLInputElement) {
+    elements.exportTransparentBgToggle.addEventListener('change', () => {
+      state.exportWizardTransparentBackground = elements.exportTransparentBgToggle.checked;
+      syncExportFormatControlState();
+      updateExportTransparentBackgroundUi();
+      void refreshExportWizardPreview();
+      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+    });
+  }
+
+  if (elements.exportTransparentBgToleranceRange instanceof HTMLInputElement) {
+    elements.exportTransparentBgToleranceRange.addEventListener('input', () => {
+      state.exportWizardBackgroundTolerance = normalizeExportBackgroundTolerance(
+        elements.exportTransparentBgToleranceRange.value
+      );
+      updateExportTransparentBackgroundUi();
+      void refreshExportWizardPreview();
+    });
+    elements.exportTransparentBgToleranceRange.addEventListener('change', () => {
+      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
     });
   }
 
@@ -590,6 +661,17 @@ function setNavButtonState(button, active) {
   button.setAttribute('aria-pressed', active ? 'true' : 'false');
 }
 
+function openLibraryPageWhenWebGalleryUnavailable() {
+  if (state.activePage !== 'url') {
+    return;
+  }
+  state.galleryView = VIEW_LIBRARY;
+  if (!String(state.activeGalleryId || '').trim()) {
+    state.galleryListMode = 'list';
+  }
+  setActivePage('library');
+}
+
 function renderVersion() {
   if (!elements.aboutVersion) {
     return;
@@ -856,6 +938,440 @@ function resolvePngColorCountFromCompression(compression) {
   return Math.max(8, Math.min(256, colors));
 }
 
+function createFullExportCropRect() {
+  return { x: 0, y: 0, width: 1, height: 1 };
+}
+
+function isExportCropRectFull(rect = {}) {
+  const safeRect = clampExportCropRect(rect);
+  return safeRect.x <= 0.0001 && safeRect.y <= 0.0001 && safeRect.width >= 0.9999 && safeRect.height >= 0.9999;
+}
+
+function normalizeExportCropRatio(value) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, raw));
+}
+
+function clampExportCropRect(rect = {}) {
+  const minSize = EXPORT_CROP_MIN_RATIO;
+  const width = Math.max(minSize, Math.min(1, normalizeExportCropRatio(rect.width)));
+  const height = Math.max(minSize, Math.min(1, normalizeExportCropRatio(rect.height)));
+  const maxX = Math.max(0, 1 - width);
+  const maxY = Math.max(0, 1 - height);
+  return {
+    x: Math.max(0, Math.min(maxX, normalizeExportCropRatio(rect.x))),
+    y: Math.max(0, Math.min(maxY, normalizeExportCropRatio(rect.y))),
+    width,
+    height
+  };
+}
+
+function createDefaultExportCropRect(item) {
+  const width = Math.max(1, Number(item?.width) || 1);
+  const height = Math.max(1, Number(item?.height) || 1);
+  if (width === height) {
+    return createFullExportCropRect();
+  }
+  if (width > height) {
+    const ratio = height / width;
+    return clampExportCropRect({
+      x: (1 - ratio) / 2,
+      y: 0,
+      width: ratio,
+      height: 1
+    });
+  }
+  const ratio = width / height;
+  return clampExportCropRect({
+    x: 0,
+    y: (1 - ratio) / 2,
+    width: 1,
+    height: ratio
+  });
+}
+
+function normalizeExportBackgroundTolerance(value) {
+  const raw = Math.round(Number(value));
+  if (!Number.isFinite(raw)) {
+    return EXPORT_BACKGROUND_TOLERANCE_DEFAULT;
+  }
+  return Math.max(0, Math.min(EXPORT_BACKGROUND_TOLERANCE_MAX, raw));
+}
+
+function getExportCropStageMetrics() {
+  if (!(elements.exportCropStage instanceof HTMLElement) || !state.exportWizardItem) {
+    return null;
+  }
+  const stageWidth = Math.max(0, Number(elements.exportCropStage.clientWidth) || 0);
+  const stageHeight = Math.max(0, Number(elements.exportCropStage.clientHeight) || 0);
+  if (stageWidth <= 0 || stageHeight <= 0) {
+    return null;
+  }
+  const sourceWidth = Math.max(
+    1,
+    Number(state.exportWizardItem.width) || Number(elements.exportCropEditorImg?.naturalWidth) || 1
+  );
+  const sourceHeight = Math.max(
+    1,
+    Number(state.exportWizardItem.height) || Number(elements.exportCropEditorImg?.naturalHeight) || 1
+  );
+  const scale = Math.min(stageWidth / sourceWidth, stageHeight / sourceHeight);
+  const width = Math.max(1, sourceWidth * scale);
+  const height = Math.max(1, sourceHeight * scale);
+  return {
+    stageWidth,
+    stageHeight,
+    sourceWidth,
+    sourceHeight,
+    left: (stageWidth - width) / 2,
+    top: (stageHeight - height) / 2,
+    width,
+    height
+  };
+}
+
+function convertExportCropRectToPixels(rect, metrics) {
+  const safeRect = clampExportCropRect(rect);
+  return {
+    x: safeRect.x * metrics.width,
+    y: safeRect.y * metrics.height,
+    width: safeRect.width * metrics.width,
+    height: safeRect.height * metrics.height
+  };
+}
+
+function convertExportCropPixelsToRect(rect, metrics) {
+  return clampExportCropRect({
+    x: rect.x / metrics.width,
+    y: rect.y / metrics.height,
+    width: rect.width / metrics.width,
+    height: rect.height / metrics.height
+  });
+}
+
+function getExportCropPointerPosition(event, metrics) {
+  if (!(elements.exportCropStage instanceof HTMLElement)) {
+    return { x: 0, y: 0 };
+  }
+  const stageRect = elements.exportCropStage.getBoundingClientRect();
+  const rawX = event.clientX - stageRect.left - metrics.left;
+  const rawY = event.clientY - stageRect.top - metrics.top;
+  return {
+    x: Math.max(0, Math.min(metrics.width, rawX)),
+    y: Math.max(0, Math.min(metrics.height, rawY))
+  };
+}
+
+function resolveExportCropPixelMinWidth(metrics, aspectRatio) {
+  const minWidth = metrics.width * EXPORT_CROP_MIN_RATIO;
+  const minHeight = metrics.height * EXPORT_CROP_MIN_RATIO;
+  return Math.max(1, minWidth, minHeight * aspectRatio);
+}
+
+function resolveExportCropPixelMinSize(metrics) {
+  return {
+    width: Math.max(1, metrics.width * EXPORT_CROP_MIN_RATIO),
+    height: Math.max(1, metrics.height * EXPORT_CROP_MIN_RATIO)
+  };
+}
+
+function resizeExportCropRectFromCorner(interaction, point) {
+  const { handle, metrics, startRect } = interaction;
+  const aspectRatio = Math.max(0.0001, startRect.width / Math.max(1, startRect.height));
+  const minWidth = resolveExportCropPixelMinWidth(metrics, aspectRatio);
+  let anchorX = startRect.x;
+  let anchorY = startRect.y;
+  let availableWidth = startRect.width;
+  let availableHeight = startRect.height;
+
+  if (handle === 'nw') {
+    anchorX = startRect.x + startRect.width;
+    anchorY = startRect.y + startRect.height;
+    availableWidth = anchorX - point.x;
+    availableHeight = anchorY - point.y;
+  } else if (handle === 'ne') {
+    anchorX = startRect.x;
+    anchorY = startRect.y + startRect.height;
+    availableWidth = point.x - anchorX;
+    availableHeight = anchorY - point.y;
+  } else if (handle === 'sw') {
+    anchorX = startRect.x + startRect.width;
+    anchorY = startRect.y;
+    availableWidth = anchorX - point.x;
+    availableHeight = point.y - anchorY;
+  } else {
+    anchorX = startRect.x;
+    anchorY = startRect.y;
+    availableWidth = point.x - anchorX;
+    availableHeight = point.y - anchorY;
+  }
+
+  const maxWidth = Math.max(1, Math.min(availableWidth, availableHeight * aspectRatio));
+  const nextWidth = Math.max(Math.min(maxWidth, Math.max(metrics.width, metrics.height * aspectRatio)), minWidth);
+  const nextHeight = nextWidth / aspectRatio;
+
+  if (handle === 'nw') {
+    return {
+      x: anchorX - nextWidth,
+      y: anchorY - nextHeight,
+      width: nextWidth,
+      height: nextHeight
+    };
+  }
+  if (handle === 'ne') {
+    return {
+      x: anchorX,
+      y: anchorY - nextHeight,
+      width: nextWidth,
+      height: nextHeight
+    };
+  }
+  if (handle === 'sw') {
+    return {
+      x: anchorX - nextWidth,
+      y: anchorY,
+      width: nextWidth,
+      height: nextHeight
+    };
+  }
+  return {
+    x: anchorX,
+    y: anchorY,
+    width: nextWidth,
+    height: nextHeight
+  };
+}
+
+function resizeExportCropRectFromEdge(interaction, point) {
+  const { handle, metrics, startRect } = interaction;
+  const minSize = resolveExportCropPixelMinSize(metrics);
+  if (handle === 'n') {
+    const nextTop = Math.max(0, Math.min(startRect.y + startRect.height - minSize.height, point.y));
+    return {
+      x: startRect.x,
+      y: nextTop,
+      width: startRect.width,
+      height: (startRect.y + startRect.height) - nextTop
+    };
+  }
+  if (handle === 's') {
+    const nextBottom = Math.max(startRect.y + minSize.height, Math.min(metrics.height, point.y));
+    return {
+      x: startRect.x,
+      y: startRect.y,
+      width: startRect.width,
+      height: nextBottom - startRect.y
+    };
+  }
+  if (handle === 'w') {
+    const nextLeft = Math.max(0, Math.min(startRect.x + startRect.width - minSize.width, point.x));
+    return {
+      x: nextLeft,
+      y: startRect.y,
+      width: (startRect.x + startRect.width) - nextLeft,
+      height: startRect.height
+    };
+  }
+  const nextRight = Math.max(startRect.x + minSize.width, Math.min(metrics.width, point.x));
+  return {
+    x: startRect.x,
+    y: startRect.y,
+    width: nextRight - startRect.x,
+    height: startRect.height
+  };
+}
+
+function updateExportCropUi() {
+  const cropEnabled = state.exportWizardCropEnabled === true;
+  const rect = clampExportCropRect(state.exportWizardCropRect);
+  state.exportWizardCropRect = rect;
+
+  if (elements.exportCropToggleBtn instanceof HTMLButtonElement) {
+    elements.exportCropToggleBtn.setAttribute('aria-pressed', cropEnabled ? 'true' : 'false');
+    elements.exportCropToggleBtn.setAttribute('aria-label', cropEnabled ? 'Desactivar recorte' : 'Activar recorte');
+    elements.exportCropToggleBtn.title = cropEnabled ? 'Desactivar recorte' : 'Recortar';
+  }
+  if (elements.exportCropEditorImg instanceof HTMLImageElement) {
+    const source = String(state.exportWizardItem?.dataUrl || '').trim();
+    if (source) {
+      if (elements.exportCropEditorImg.src !== source) {
+        elements.exportCropEditorImg.src = source;
+      }
+    } else {
+      elements.exportCropEditorImg.removeAttribute('src');
+    }
+  }
+  if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
+    elements.exportWizardPreviewImg.classList.toggle('hidden', cropEnabled);
+  }
+  if (elements.exportCropStage instanceof HTMLElement) {
+    elements.exportCropStage.classList.toggle('hidden', !cropEnabled);
+    elements.exportCropStage.setAttribute('aria-hidden', cropEnabled ? 'false' : 'true');
+  }
+  if (elements.exportCropBox instanceof HTMLElement) {
+    elements.exportCropBox.classList.toggle('hidden', !cropEnabled);
+  }
+
+  const interaction = state.exportWizardCropInteraction;
+  if (elements.exportCropBox instanceof HTMLElement) {
+    elements.exportCropBox.classList.toggle('dragging', interaction?.mode === 'move');
+    elements.exportCropBox.classList.toggle('resizing', interaction?.mode === 'resize');
+    if (interaction?.mode === 'resize') {
+      const cursor =
+        interaction.handle === 'n' || interaction.handle === 's'
+          ? 'ns-resize'
+          : interaction.handle === 'e' || interaction.handle === 'w'
+            ? 'ew-resize'
+            : interaction.handle === 'ne' || interaction.handle === 'sw'
+              ? 'nesw-resize'
+              : 'nwse-resize';
+      elements.exportCropBox.style.cursor = cursor;
+    } else {
+      elements.exportCropBox.style.cursor = interaction?.mode === 'move' ? 'grabbing' : 'grab';
+    }
+  }
+
+  if (!cropEnabled) {
+    return;
+  }
+
+  const metrics = getExportCropStageMetrics();
+  if (!metrics) {
+    return;
+  }
+
+  if (elements.exportCropEditorImg instanceof HTMLImageElement) {
+    elements.exportCropEditorImg.style.left = `${metrics.left}px`;
+    elements.exportCropEditorImg.style.top = `${metrics.top}px`;
+    elements.exportCropEditorImg.style.width = `${metrics.width}px`;
+    elements.exportCropEditorImg.style.height = `${metrics.height}px`;
+  }
+
+  if (elements.exportCropBox instanceof HTMLElement) {
+    const rectPixels = convertExportCropRectToPixels(rect, metrics);
+    elements.exportCropBox.style.left = `${metrics.left + rectPixels.x}px`;
+    elements.exportCropBox.style.top = `${metrics.top + rectPixels.y}px`;
+    elements.exportCropBox.style.width = `${rectPixels.width}px`;
+    elements.exportCropBox.style.height = `${rectPixels.height}px`;
+  }
+}
+
+function handleExportCropPointerDown(event) {
+  if (state.exportWizardCropEnabled !== true || event.button !== 0) {
+    return;
+  }
+  const target = event.target;
+  if (!(target instanceof Element) || !(elements.exportCropBox instanceof HTMLElement)) {
+    return;
+  }
+  if (!target.closest('#exportCropBox')) {
+    return;
+  }
+  const metrics = getExportCropStageMetrics();
+  if (!metrics) {
+    return;
+  }
+  const handle = target.closest('[data-export-crop-handle]');
+  const mode = handle ? 'resize' : 'move';
+  const startPoint = getExportCropPointerPosition(event, metrics);
+  state.exportWizardCropInteraction = {
+    pointerId: event.pointerId,
+    mode,
+    handle: handle ? String(handle.getAttribute('data-export-crop-handle') || '').trim() : '',
+    metrics,
+    startPoint,
+    startRect: convertExportCropRectToPixels(state.exportWizardCropRect, metrics)
+  };
+  if (event.currentTarget instanceof HTMLElement) {
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+  event.preventDefault();
+  updateExportCropUi();
+}
+
+function handleExportCropPointerMove(event) {
+  const interaction = state.exportWizardCropInteraction;
+  if (!interaction || event.pointerId !== interaction.pointerId) {
+    return;
+  }
+  const point = getExportCropPointerPosition(event, interaction.metrics);
+  let nextRect = interaction.startRect;
+
+  if (interaction.mode === 'move') {
+    const nextX = Math.max(
+      0,
+      Math.min(
+        interaction.metrics.width - interaction.startRect.width,
+        interaction.startRect.x + (point.x - interaction.startPoint.x)
+      )
+    );
+    const nextY = Math.max(
+      0,
+      Math.min(
+        interaction.metrics.height - interaction.startRect.height,
+        interaction.startRect.y + (point.y - interaction.startPoint.y)
+      )
+    );
+    nextRect = {
+      x: nextX,
+      y: nextY,
+      width: interaction.startRect.width,
+      height: interaction.startRect.height
+    };
+  } else if (interaction.handle) {
+    nextRect =
+      interaction.handle.length === 2
+        ? resizeExportCropRectFromCorner(interaction, point)
+        : resizeExportCropRectFromEdge(interaction, point);
+  }
+
+  state.exportWizardCropRect = convertExportCropPixelsToRect(nextRect, interaction.metrics);
+  updateExportCropUi();
+  event.preventDefault();
+}
+
+function handleExportCropPointerUp(event) {
+  const interaction = state.exportWizardCropInteraction;
+  if (!interaction || event.pointerId !== interaction.pointerId) {
+    return;
+  }
+  state.exportWizardCropInteraction = null;
+  updateExportCropUi();
+  void refreshExportWizardPreview();
+  void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+}
+
+function updateExportTransparentBackgroundUi() {
+  const enabled = state.exportWizardTransparentBackground === true;
+  const tolerance = normalizeExportBackgroundTolerance(state.exportWizardBackgroundTolerance);
+  state.exportWizardBackgroundTolerance = tolerance;
+  if (elements.exportTransparentBgToggle instanceof HTMLInputElement) {
+    elements.exportTransparentBgToggle.checked = enabled;
+  }
+  if (elements.exportTransparentBgControls instanceof HTMLElement) {
+    elements.exportTransparentBgControls.classList.toggle('hidden', !enabled);
+  }
+  if (elements.exportTransparentBgToleranceRange instanceof HTMLInputElement) {
+    elements.exportTransparentBgToleranceRange.disabled = !enabled;
+    elements.exportTransparentBgToleranceRange.value = String(tolerance);
+  }
+  if (elements.exportTransparentBgToleranceValue instanceof HTMLElement) {
+    elements.exportTransparentBgToleranceValue.textContent = String(tolerance);
+  }
+}
+
+function getCurrentExportEditOptions() {
+  return {
+    cropEnabled: state.exportWizardCropEnabled === true,
+    cropRect: clampExportCropRect(state.exportWizardCropRect),
+    transparentBackground: state.exportWizardTransparentBackground === true,
+    backgroundTolerance: normalizeExportBackgroundTolerance(state.exportWizardBackgroundTolerance)
+  };
+}
+
 function updateExportCompressionUi() {
   const safeCompression = normalizeExportCompression(state.exportWizardCompression);
   if (elements.exportCompressionRange instanceof HTMLInputElement) {
@@ -893,7 +1409,7 @@ function resolveExportPreviewTargetSize(item, preset) {
   return Math.min(128, resolveFaviconMaxSourceSize(item));
 }
 
-function resolveRecommendationCacheKey(item, format, preset) {
+function resolveRecommendationCacheKey(item, format, preset, editOptions = {}) {
   const safeFormat = normalizeExportFormat(format);
   const safePreset = normalizeExportPreset(preset);
   const itemId = String(item?.id || '').trim();
@@ -901,7 +1417,13 @@ function resolveRecommendationCacheKey(item, format, preset) {
   const height = Math.max(0, Number(item?.height) || 0);
   const size = Math.max(0, Number(item?.fileSize) || 0) || getDataUrlByteLength(item?.dataUrl);
   const sourceSignature = `${itemId}|${width}x${height}|${size}`;
-  return `${sourceSignature}|${safeFormat}|${safePreset}`;
+  const rect = clampExportCropRect(editOptions.cropRect);
+  const editSignature = [
+    editOptions.cropEnabled === true ? 'crop' : 'full',
+    `${Math.round(rect.x * 100)}-${Math.round(rect.y * 100)}-${Math.round(rect.width * 100)}-${Math.round(rect.height * 100)}`,
+    editOptions.transparentBackground === true ? `alpha-${normalizeExportBackgroundTolerance(editOptions.backgroundTolerance)}` : 'opaque'
+  ].join('|');
+  return `${sourceSignature}|${safeFormat}|${safePreset}|${editSignature}`;
 }
 
 function resolveRecommendationErrorThreshold(format) {
@@ -950,8 +1472,9 @@ async function applyRecommendedCompressionForCurrentExport(options = {}) {
   const apply = options.apply !== false;
   const item = state.exportWizardItem;
   const preset = normalizeExportPreset(state.exportWizardPreset);
-  const format = resolveExportFormatForPreset(state.exportWizardFormat, preset);
-  const cacheKey = resolveRecommendationCacheKey(item, format, preset);
+  const editOptions = getCurrentExportEditOptions();
+  const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
+  const cacheKey = resolveRecommendationCacheKey(item, format, preset, editOptions);
   const token = state.exportWizardRecommendationToken + 1;
   state.exportWizardRecommendationToken = token;
 
@@ -974,7 +1497,8 @@ async function applyRecommendedCompressionForCurrentExport(options = {}) {
   try {
     const recommended = await estimateRecommendedCompressionForItem(item, {
       format,
-      preset
+      preset,
+      ...editOptions
     });
     if (token !== state.exportWizardRecommendationToken || !state.exportWizardItem?.dataUrl) {
       return;
@@ -1002,14 +1526,21 @@ async function estimateRecommendedCompressionForItem(item, options = {}) {
     return EXPORT_DEFAULT_COMPRESSION;
   }
   const preset = normalizeExportPreset(options.preset || state.exportWizardPreset);
-  const format = resolveExportFormatForPreset(options.format || state.exportWizardFormat, preset);
+  const editOptions = {
+    cropEnabled: options.cropEnabled === true,
+    cropRect: options.cropRect,
+    transparentBackground: options.transparentBackground === true,
+    backgroundTolerance: options.backgroundTolerance
+  };
+  const format = resolveEffectiveExportFormat(options.format || state.exportWizardFormat, preset, editOptions);
   const targetSize = resolveExportPreviewTargetSize(item, preset);
 
   const image = await loadImage(dataUrl);
   const canvas = buildExportCanvasFromImage(image, {
     format,
     targetSize,
-    maxEdge: EXPORT_RECOMMENDATION_MAX_EDGE
+    maxEdge: EXPORT_RECOMMENDATION_MAX_EDGE,
+    ...editOptions
   });
   const ctx = canvas.getContext('2d');
   if (!ctx) {
@@ -1083,6 +1614,12 @@ function syncExportFormatControlState() {
     return;
   }
   const isFaviconPreset = normalizeExportPreset(state.exportWizardPreset) === EXPORT_PRESET_FAVICON;
+  const needsTransparency = state.exportWizardTransparentBackground === true;
+  for (const option of Array.from(elements.exportFormatSelect.options)) {
+    if (String(option.value || '').trim() === 'image/jpeg') {
+      option.disabled = needsTransparency;
+    }
+  }
   if (isFaviconPreset) {
     state.exportWizardFormat = 'image/png';
     elements.exportFormatSelect.value = state.exportWizardFormat;
@@ -1090,8 +1627,16 @@ function syncExportFormatControlState() {
     elements.exportFormatSelect.title = 'En preset favicon el format sempre es PNG';
     return;
   }
+  if (needsTransparency && normalizeExportFormat(state.exportWizardFormat) === 'image/jpeg') {
+    state.exportWizardFormat = 'image/png';
+  }
+  elements.exportFormatSelect.value = state.exportWizardFormat;
   elements.exportFormatSelect.disabled = false;
-  elements.exportFormatSelect.removeAttribute('title');
+  if (needsTransparency) {
+    elements.exportFormatSelect.title = 'JPG no admet transparència; s\'utilitza PNG o WebP';
+  } else {
+    elements.exportFormatSelect.removeAttribute('title');
+  }
 }
 
 function resolveExportFormatForPreset(format, preset) {
@@ -1100,6 +1645,14 @@ function resolveExportFormatForPreset(format, preset) {
     return 'image/png';
   }
   return normalizeExportFormat(format);
+}
+
+function resolveEffectiveExportFormat(format, preset, editOptions = {}) {
+  const safeFormat = resolveExportFormatForPreset(format, preset);
+  if (editOptions.transparentBackground === true && safeFormat === 'image/jpeg') {
+    return 'image/png';
+  }
+  return safeFormat;
 }
 
 function resolveExportQuality(format, preset, compression) {
@@ -1151,6 +1704,11 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardPreset = EXPORT_PRESET_ORIGINAL;
   state.exportWizardCompression = EXPORT_DEFAULT_COMPRESSION;
   state.exportWizardCompressionTouched = false;
+  state.exportWizardCropEnabled = false;
+  state.exportWizardCropRect = createDefaultExportCropRect(state.exportWizardItem);
+  state.exportWizardCropInteraction = null;
+  state.exportWizardTransparentBackground = false;
+  state.exportWizardBackgroundTolerance = EXPORT_BACKGROUND_TOLERANCE_DEFAULT;
   state.exportWizardRecommendationToken += 1;
   state.exportWizardBusy = false;
 
@@ -1161,6 +1719,8 @@ function openExportWizardFromImageId(imageId, options = {}) {
     elements.exportPresetSelect.value = state.exportWizardPreset;
   }
   syncExportFormatControlState();
+  updateExportCropUi();
+  updateExportTransparentBackgroundUi();
   setExportRecommendedCompression(null);
   updateExportCompressionUi();
   if (elements.exportWizardSourceName instanceof HTMLElement) {
@@ -1176,7 +1736,8 @@ function openExportWizardFromImageId(imageId, options = {}) {
       state.exportWizardItem.width > 0 && state.exportWizardItem.height > 0
         ? `${state.exportWizardItem.width}x${state.exportWizardItem.height}`
         : '?x?';
-    elements.exportWizardOriginalMeta.textContent = `Original: ${dims}px · ${formatBytes(fileSize)}`;
+    const originalFormatLabel = formatOriginalImageFormatLabel(state.exportWizardItem.dataUrl);
+    elements.exportWizardOriginalMeta.textContent = `Original · ${originalFormatLabel} · ${dims} px · ${formatBytes(fileSize)}`;
   }
   if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
     elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
@@ -1196,6 +1757,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
     window.requestAnimationFrame(() => {
       elements.exportWizardNameInput.focus();
       elements.exportWizardNameInput.select();
+      updateExportCropUi();
     });
   }
   void refreshExportWizardPreview();
@@ -1254,10 +1816,24 @@ function closeExportWizardModal() {
   state.exportWizardPreviewToken += 1;
   state.exportWizardRecommendationToken += 1;
   state.exportWizardCompressionTouched = false;
+  state.exportWizardCropEnabled = false;
+  state.exportWizardCropRect = createFullExportCropRect();
+  state.exportWizardCropInteraction = null;
+  state.exportWizardTransparentBackground = false;
+  state.exportWizardBackgroundTolerance = EXPORT_BACKGROUND_TOLERANCE_DEFAULT;
   state.exportWizardBusy = false;
   setExportRecommendedCompression(null);
+  updateExportCropUi();
+  updateExportTransparentBackgroundUi();
   if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
     elements.exportWizardPreviewImg.removeAttribute('src');
+  }
+  if (elements.exportCropEditorImg instanceof HTMLImageElement) {
+    elements.exportCropEditorImg.removeAttribute('src');
+    elements.exportCropEditorImg.removeAttribute('style');
+  }
+  if (elements.exportCropBox instanceof HTMLElement) {
+    elements.exportCropBox.removeAttribute('style');
   }
 }
 
@@ -1273,7 +1849,8 @@ async function refreshExportWizardPreview() {
   }
 
   const preset = normalizeExportPreset(state.exportWizardPreset);
-  const format = resolveExportFormatForPreset(state.exportWizardFormat, preset);
+  const editOptions = getCurrentExportEditOptions();
+  const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
   const previewSize =
     preset === EXPORT_PRESET_FAVICON
       ? Math.min(128, resolveFaviconMaxSourceSize(state.exportWizardItem))
@@ -1285,7 +1862,8 @@ async function refreshExportWizardPreview() {
       format,
       targetSize: previewSize,
       quality,
-      pngCompression: state.exportWizardCompression
+      pngCompression: state.exportWizardCompression,
+      ...editOptions
     });
     if (token !== state.exportWizardPreviewToken) {
       return;
@@ -1302,10 +1880,6 @@ async function refreshExportWizardPreview() {
     }
     if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
       const formatLabel = exportFormatLabel(format);
-      const presetLabel =
-        preset === EXPORT_PRESET_FAVICON
-          ? 'Preset favicon (exporta ZIP amb totes les mides)'
-          : 'Mida original';
       const pngColorCount = resolvePngColorCountFromCompression(state.exportWizardCompression);
       const compressionLabel =
         preset === EXPORT_PRESET_FAVICON
@@ -1317,8 +1891,23 @@ async function refreshExportWizardPreview() {
               ? 'PNG sense pèrdua'
               : `PNG quantitzat ${normalizeExportCompression(state.exportWizardCompression)}% (${pngColorCount} colors)`
             : `Compressio ${normalizeExportCompression(state.exportWizardCompression)}% · Qualitat ${Math.round((quality || 0) * 100)}%`;
+      const originalWidth = Math.max(0, Number(state.exportWizardItem?.width) || 0);
+      const originalHeight = Math.max(0, Number(state.exportWizardItem?.height) || 0);
+      const hasOriginalDims = originalWidth > 0 && originalHeight > 0;
+      const exportDimsLabel =
+        hasOriginalDims && (asset.width !== originalWidth || asset.height !== originalHeight)
+          ? ` · ${asset.width}x${asset.height} px`
+          : '';
+      const toolLabels = [];
+      if (editOptions.cropEnabled) {
+        toolLabels.push('retall actiu');
+      }
+      if (editOptions.transparentBackground) {
+        toolLabels.push('fons transparent');
+      }
+      const toolsLabel = toolLabels.length > 0 ? ` · ${toolLabels.join(' · ')}` : '';
       elements.exportWizardPreviewMeta.textContent =
-        `Preview ${asset.width}x${asset.height}px · ${formatLabel} · ${formatBytesPrecise(asset.blob.size)} · ${presetLabel} · ${compressionLabel}`;
+        `Export · ${formatLabel}${exportDimsLabel} · ${formatBytes(asset.blob.size)} · ${compressionLabel}${toolsLabel}`;
     }
   } catch (error) {
     if (token !== state.exportWizardPreviewToken) {
@@ -1351,7 +1940,8 @@ async function exportWizardDownload() {
   }
 
   const preset = normalizeExportPreset(state.exportWizardPreset);
-  const format = resolveExportFormatForPreset(state.exportWizardFormat, preset);
+  const editOptions = getCurrentExportEditOptions();
+  const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
   const quality = resolveExportQuality(format, preset, state.exportWizardCompression);
   const extension = exportExtensionFromFormat(format);
 
@@ -1368,7 +1958,8 @@ async function exportWizardDownload() {
           format,
           targetSize: Number(size) || 0,
           quality,
-          pngCompression: state.exportWizardCompression
+          pngCompression: state.exportWizardCompression,
+          ...editOptions
         });
         const bytes = new Uint8Array(await asset.blob.arrayBuffer());
         entries.push({
@@ -1388,7 +1979,8 @@ async function exportWizardDownload() {
       format,
       targetSize: 0,
       quality,
-      pngCompression: state.exportWizardCompression
+      pngCompression: state.exportWizardCompression,
+      ...editOptions
     });
     await downloadBlobAsset(asset.blob, `${baseName}.${extension}`);
     showFeedbackToast('Imatge exportada');
@@ -1430,7 +2022,11 @@ async function renderImageExportAsset(dataUrl, options = {}) {
   const image = await loadImage(source);
   const canvas = buildExportCanvasFromImage(image, {
     format,
-    targetSize
+    targetSize,
+    cropEnabled: options.cropEnabled === true,
+    cropRect: options.cropRect,
+    transparentBackground: options.transparentBackground === true,
+    backgroundTolerance: options.backgroundTolerance
   });
   const blob = await encodeCanvasToExportBlob(canvas, {
     format,
@@ -1462,8 +2058,22 @@ function buildExportCanvasFromImage(image, options = {}) {
   const maxEdge = Math.max(0, Math.round(Number(options.maxEdge) || 0));
   const sourceWidth = Math.max(1, Number(image?.naturalWidth) || 1);
   const sourceHeight = Math.max(1, Number(image?.naturalHeight) || 1);
-  let width = targetSize > 0 ? targetSize : sourceWidth;
-  let height = targetSize > 0 ? targetSize : sourceHeight;
+  const cropEnabled = options.cropEnabled === true;
+  const cropRect = cropEnabled ? clampExportCropRect(options.cropRect) : createFullExportCropRect();
+  const cropLeft = Math.max(0, Math.min(sourceWidth - 1, Math.round(cropRect.x * sourceWidth)));
+  const cropTop = Math.max(0, Math.min(sourceHeight - 1, Math.round(cropRect.y * sourceHeight)));
+  const cropRight = Math.max(
+    cropLeft + 1,
+    Math.min(sourceWidth, Math.round((cropRect.x + cropRect.width) * sourceWidth))
+  );
+  const cropBottom = Math.max(
+    cropTop + 1,
+    Math.min(sourceHeight, Math.round((cropRect.y + cropRect.height) * sourceHeight))
+  );
+  const cropWidth = Math.max(1, cropRight - cropLeft);
+  const cropHeight = Math.max(1, cropBottom - cropTop);
+  let width = targetSize > 0 ? targetSize : cropWidth;
+  let height = targetSize > 0 ? targetSize : cropHeight;
 
   if (maxEdge > 0) {
     const dominantEdge = Math.max(width, height);
@@ -1492,16 +2102,127 @@ function buildExportCanvasFromImage(image, options = {}) {
   }
 
   if (targetSize > 0) {
-    const scale = Math.min(width / sourceWidth, height / sourceHeight);
-    const drawWidth = Math.max(1, Math.round(sourceWidth * scale));
-    const drawHeight = Math.max(1, Math.round(sourceHeight * scale));
+    const scale = Math.min(width / cropWidth, height / cropHeight);
+    const drawWidth = Math.max(1, Math.round(cropWidth * scale));
+    const drawHeight = Math.max(1, Math.round(cropHeight * scale));
     const drawX = Math.round((width - drawWidth) / 2);
     const drawY = Math.round((height - drawHeight) / 2);
-    ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+    ctx.drawImage(image, cropLeft, cropTop, cropWidth, cropHeight, drawX, drawY, drawWidth, drawHeight);
   } else {
-    ctx.drawImage(image, 0, 0, width, height);
+    ctx.drawImage(image, cropLeft, cropTop, cropWidth, cropHeight, 0, 0, width, height);
+  }
+
+  if (options.transparentBackground === true && format !== 'image/jpeg') {
+    removeBackgroundFromCanvas(canvas, normalizeExportBackgroundTolerance(options.backgroundTolerance));
   }
   return canvas;
+}
+
+function removeBackgroundFromCanvas(canvas, tolerance) {
+  const width = Math.max(1, Number(canvas?.width) || 1);
+  const height = Math.max(1, Number(canvas?.height) || 1);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('canvas_context_unavailable');
+  }
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  const safeTolerance = normalizeExportBackgroundTolerance(tolerance);
+  if (safeTolerance <= 0) {
+    return;
+  }
+
+  const backgroundSamples = collectCanvasCornerSamples(data, width, height);
+  if (backgroundSamples.length === 0) {
+    return;
+  }
+
+  const visited = new Uint8Array(width * height);
+  const queue = new Uint32Array(width * height);
+  let head = 0;
+  let tail = 0;
+
+  const enqueue = (x, y) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) {
+      return;
+    }
+    const pixelIndex = y * width + x;
+    if (visited[pixelIndex] === 1) {
+      return;
+    }
+    const dataIndex = pixelIndex * 4;
+    if (!pixelMatchesBackgroundSample(data, dataIndex, backgroundSamples, safeTolerance)) {
+      return;
+    }
+    visited[pixelIndex] = 1;
+    queue[tail] = pixelIndex;
+    tail += 1;
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    enqueue(x, 0);
+    enqueue(x, height - 1);
+  }
+  for (let y = 0; y < height; y += 1) {
+    enqueue(0, y);
+    enqueue(width - 1, y);
+  }
+
+  while (head < tail) {
+    const pixelIndex = queue[head];
+    head += 1;
+    const x = pixelIndex % width;
+    const y = Math.floor(pixelIndex / width);
+    const dataIndex = pixelIndex * 4;
+    data[dataIndex + 3] = 0;
+    enqueue(x - 1, y);
+    enqueue(x + 1, y);
+    enqueue(x, y - 1);
+    enqueue(x, y + 1);
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function collectCanvasCornerSamples(data, width, height) {
+  if (!(data instanceof Uint8ClampedArray)) {
+    return [];
+  }
+  const corners = [
+    [0, 0],
+    [Math.max(0, width - 1), 0],
+    [0, Math.max(0, height - 1)],
+    [Math.max(0, width - 1), Math.max(0, height - 1)]
+  ];
+  const samples = [];
+  for (const [x, y] of corners) {
+    const index = ((y * width) + x) * 4;
+    const alpha = data[index + 3];
+    if (alpha <= 0) {
+      continue;
+    }
+    samples.push([data[index], data[index + 1], data[index + 2], alpha]);
+  }
+  return samples;
+}
+
+function pixelMatchesBackgroundSample(data, dataIndex, samples, tolerance) {
+  const alpha = data[dataIndex + 3];
+  if (alpha <= 0) {
+    return true;
+  }
+  const threshold = tolerance * tolerance;
+  for (const sample of samples) {
+    const dr = data[dataIndex] - sample[0];
+    const dg = data[dataIndex + 1] - sample[1];
+    const db = data[dataIndex + 2] - sample[2];
+    const da = alpha - sample[3];
+    const distance = (dr * dr) + (dg * dg) + (db * db) + ((da * da) * 0.2);
+    if (distance <= threshold) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function encodeCanvasToExportBlob(canvas, options = {}) {
@@ -2160,6 +2881,20 @@ function extractImageExtensionFromDataUrl(dataUrl) {
   return normalized || '';
 }
 
+function formatOriginalImageFormatLabel(dataUrl) {
+  const ext = extractImageExtensionFromDataUrl(dataUrl);
+  if (!ext) {
+    return 'IMG';
+  }
+  if (ext === 'jpg') {
+    return 'JPG';
+  }
+  if (ext === 'ico') {
+    return 'ICO';
+  }
+  return ext.toUpperCase();
+}
+
 function sanitizeArchiveName(value) {
   const safe = String(value || '')
     .trim()
@@ -2584,6 +3319,7 @@ async function loadWebGallery() {
   if (!state.activeTabId || !state.activeTabUrl) {
     state.webItems = [];
     state.selectedWebIds = new Set();
+    openLibraryPageWhenWebGalleryUnavailable();
     renderActiveLogoLibraryGrid();
     return;
   }
@@ -2627,12 +3363,14 @@ async function loadWebGallery() {
     state.selectedWebIds = new Set(normalized.map((item) => String(item.id || '').trim()).filter(Boolean));
     if (normalized.length === 0) {
       showFeedbackToast('No s\'han trobat imatges web', 'error');
+      openLibraryPageWhenWebGalleryUnavailable();
     }
   } catch (error) {
     console.error('Web gallery load failed', error);
     state.webItems = [];
     state.selectedWebIds = new Set();
     showFeedbackToast('Error carregant imatges web', 'error');
+    openLibraryPageWhenWebGalleryUnavailable();
   } finally {
     state.webLoading = false;
     renderActiveLogoLibraryGrid();
