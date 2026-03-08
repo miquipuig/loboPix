@@ -290,7 +290,7 @@ function bindEvents() {
       const shouldEnable = state.exportWizardCropEnabled !== true;
       state.exportWizardCropEnabled = shouldEnable;
       if (shouldEnable && isExportCropRectFull(state.exportWizardCropRect)) {
-        state.exportWizardCropRect = createDefaultExportCropRect(state.exportWizardItem);
+        state.exportWizardCropRect = createDefaultExportCropRect(state.exportWizardItem, state.exportWizardPreset);
       }
       updateExportCropUi();
       void refreshExportWizardPreview();
@@ -436,7 +436,11 @@ function bindEvents() {
   if (elements.exportPresetSelect instanceof HTMLSelectElement) {
     elements.exportPresetSelect.addEventListener('change', () => {
       state.exportWizardPreset = normalizeExportPreset(elements.exportPresetSelect.value);
+      if (isExportCropAspectLocked(state.exportWizardPreset)) {
+        state.exportWizardCropRect = createDefaultExportCropRect(state.exportWizardItem, state.exportWizardPreset);
+      }
       syncExportFormatControlState();
+      updateExportCropUi();
       state.exportWizardCompressionTouched = false;
       void refreshExportWizardPreview();
       void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
@@ -1030,6 +1034,10 @@ function createFullExportCropRect() {
   return { x: 0, y: 0, width: 1, height: 1 };
 }
 
+function isExportCropAspectLocked(preset = state.exportWizardPreset) {
+  return normalizeExportPreset(preset) === EXPORT_PRESET_FAVICON;
+}
+
 function isExportCropRectFull(rect = {}) {
   const safeRect = clampExportCropRect(rect);
   return safeRect.x <= 0.0001 && safeRect.y <= 0.0001 && safeRect.width >= 0.9999 && safeRect.height >= 0.9999;
@@ -1057,7 +1065,7 @@ function clampExportCropRect(rect = {}) {
   };
 }
 
-function createDefaultExportCropRect(item) {
+function createSquareExportCropRect(item) {
   const width = Math.max(1, Number(item?.width) || 1);
   const height = Math.max(1, Number(item?.height) || 1);
   if (width === height) {
@@ -1079,6 +1087,13 @@ function createDefaultExportCropRect(item) {
     width: 1,
     height: ratio
   });
+}
+
+function createDefaultExportCropRect(item, preset = state.exportWizardPreset) {
+  if (!isExportCropAspectLocked(preset)) {
+    return createFullExportCropRect();
+  }
+  return createSquareExportCropRect(item);
 }
 
 function normalizeExportBackgroundTolerance(value) {
@@ -1320,6 +1335,7 @@ function resizeExportCropRectFromEdge(interaction, point) {
 function updateExportCropUi() {
   const cropEnabled = state.exportWizardCropEnabled === true;
   const rect = clampExportCropRect(state.exportWizardCropRect);
+  const aspectLocked = isExportCropAspectLocked(state.exportWizardPreset);
   state.exportWizardCropRect = rect;
 
   if (elements.exportCropToggleBtn instanceof HTMLButtonElement) {
@@ -1346,6 +1362,7 @@ function updateExportCropUi() {
   }
   if (elements.exportCropBox instanceof HTMLElement) {
     elements.exportCropBox.classList.toggle('hidden', !cropEnabled);
+    elements.exportCropBox.classList.toggle('aspect-locked', aspectLocked);
   }
 
   const interaction = state.exportWizardCropInteraction;
@@ -1521,6 +1538,18 @@ function getCurrentExportEditOptions() {
     cropRect: clampExportCropRect(state.exportWizardCropRect),
     transparentBackground: state.exportWizardTransparentBackground === true,
     backgroundTolerance: normalizeExportBackgroundTolerance(state.exportWizardBackgroundTolerance)
+  };
+}
+
+function getCurrentExportPreviewEditOptions(preset = state.exportWizardPreset) {
+  const editOptions = getCurrentExportEditOptions();
+  if (normalizeExportPreset(preset) !== EXPORT_PRESET_FAVICON) {
+    return editOptions;
+  }
+  return {
+    ...editOptions,
+    cropEnabled: false,
+    cropRect: createFullExportCropRect()
   };
 }
 
@@ -2006,26 +2035,39 @@ async function refreshExportWizardPreview() {
 
   const preset = normalizeExportPreset(state.exportWizardPreset);
   const editOptions = getCurrentExportEditOptions();
+  const previewEditOptions = getCurrentExportPreviewEditOptions(preset);
   const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
-  const previewSize =
-    preset === EXPORT_PRESET_FAVICON
-      ? Math.min(128, resolveFaviconMaxSourceSize(state.exportWizardItem))
-      : 0;
+  const exportPreviewSize = resolveExportPreviewTargetSize(state.exportWizardItem, preset);
+  const imagePreviewSize = preset === EXPORT_PRESET_FAVICON ? 0 : exportPreviewSize;
   const quality = resolveExportQuality(format, preset, state.exportWizardCompression);
 
   try {
-    const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
+    const previewAsset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
       format,
-      targetSize: previewSize,
+      targetSize: imagePreviewSize,
       quality,
       pngCompression: state.exportWizardCompression,
-      ...editOptions
+      ...previewEditOptions
     });
     if (token !== state.exportWizardPreviewToken) {
       return;
     }
 
-    const nextUrl = URL.createObjectURL(asset.blob);
+    const metaAsset =
+      preset === EXPORT_PRESET_FAVICON
+        ? await renderImageExportAsset(state.exportWizardItem.dataUrl, {
+            format,
+            targetSize: exportPreviewSize,
+            quality,
+            pngCompression: state.exportWizardCompression,
+            ...editOptions
+          })
+        : previewAsset;
+    if (token !== state.exportWizardPreviewToken) {
+      return;
+    }
+
+    const nextUrl = URL.createObjectURL(previewAsset.blob);
     if (state.exportWizardPreviewUrl) {
       URL.revokeObjectURL(state.exportWizardPreviewUrl);
     }
@@ -2051,19 +2093,16 @@ async function refreshExportWizardPreview() {
       const originalHeight = Math.max(0, Number(state.exportWizardItem?.height) || 0);
       const hasOriginalDims = originalWidth > 0 && originalHeight > 0;
       const exportDimsLabel =
-        hasOriginalDims && (asset.width !== originalWidth || asset.height !== originalHeight)
-          ? ` · ${asset.width}x${asset.height} px`
+        hasOriginalDims && (metaAsset.width !== originalWidth || metaAsset.height !== originalHeight)
+          ? ` · ${metaAsset.width}x${metaAsset.height} px`
           : '';
       const toolLabels = [];
-      if (editOptions.cropEnabled) {
-        toolLabels.push('retall actiu');
-      }
       if (editOptions.transparentBackground) {
         toolLabels.push('fons transparent');
       }
       const toolsLabel = toolLabels.length > 0 ? ` · ${toolLabels.join(' · ')}` : '';
       elements.exportWizardPreviewMeta.textContent =
-        `Export · ${formatLabel}${exportDimsLabel} · ${formatBytes(asset.blob.size)} · ${compressionLabel}${toolsLabel}`;
+        `Export · ${formatLabel}${exportDimsLabel} · ${formatBytes(metaAsset.blob.size)} · ${compressionLabel}${toolsLabel}`;
     }
   } catch (error) {
     if (token !== state.exportWizardPreviewToken) {

@@ -2804,6 +2804,13 @@ select:disabled {
   cursor: ew-resize;
 }
 
+.export-crop-box.aspect-locked .export-crop-handle-n,
+.export-crop-box.aspect-locked .export-crop-handle-e,
+.export-crop-box.aspect-locked .export-crop-handle-s,
+.export-crop-box.aspect-locked .export-crop-handle-w {
+  display: none;
+}
+
 .export-wizard-meta {
   margin: 0;
   font-size: 11px;
