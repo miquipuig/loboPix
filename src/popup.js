@@ -879,9 +879,9 @@ function setExportRecommendedCompression(compression) {
     elements.exportCompressionRecommendedDot.removeAttribute('style');
     return;
   }
-  const dotPosition = Math.min(99.5, Math.max(0.5, safeCompression));
+  const dotRatio = Math.min(1, Math.max(0, safeCompression / 100));
   elements.exportCompressionRecommendedDot.classList.remove('hidden');
-  elements.exportCompressionRecommendedDot.style.left = `${dotPosition}%`;
+  elements.exportCompressionRecommendedDot.style.setProperty('--recommended-ratio', String(dotRatio));
   elements.exportCompressionRecommendedDot.title = `Recomanat ${safeCompression}%`;
 }
 

@@ -2595,6 +2595,9 @@ select:disabled {
 }
 
 .export-compression-track {
+  --compression-thumb-size: 14px;
+  --compression-track-height: 4px;
+  --recommended-ratio: 0.72;
   position: relative;
   width: 100%;
   min-height: 18px;
@@ -2604,8 +2607,8 @@ select:disabled {
 
 .export-compression-ticks {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: calc(var(--compression-thumb-size) / 2);
+  right: calc(var(--compression-thumb-size) / 2);
   top: 50%;
   height: 10px;
   transform: translateY(-50%);
@@ -2624,14 +2627,54 @@ select:disabled {
   position: relative;
   z-index: 2;
   width: 100%;
+  margin: 0;
   accent-color: #2563eb;
   background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.export-compression-range::-webkit-slider-runnable-track {
+  height: var(--compression-track-height);
+  border-radius: 999px;
+  background: linear-gradient(90deg, #93c5fd 0%, #2563eb 100%);
+}
+
+.export-compression-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--compression-thumb-size);
+  height: var(--compression-thumb-size);
+  margin-top: calc((var(--compression-track-height) - var(--compression-thumb-size)) / 2);
+  border-radius: 999px;
+  border: 2px solid #ffffff;
+  background: #1d4ed8;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.35);
+}
+
+.export-compression-range::-moz-range-track {
+  height: var(--compression-track-height);
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #93c5fd 0%, #2563eb 100%);
+}
+
+.export-compression-range::-moz-range-thumb {
+  width: var(--compression-thumb-size);
+  height: var(--compression-thumb-size);
+  border-radius: 999px;
+  border: 2px solid #ffffff;
+  background: #1d4ed8;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.35);
 }
 
 .export-compression-recommended-dot {
   position: absolute;
   top: 50%;
-  left: 0%;
+  left: calc(
+    (var(--compression-thumb-size) / 2) +
+    ((100% - var(--compression-thumb-size)) * var(--recommended-ratio))
+  );
   width: 10px;
   height: 10px;
   border-radius: 999px;
