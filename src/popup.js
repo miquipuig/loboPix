@@ -92,6 +92,8 @@ const elements = {
   exportCompressionRecommendedDot: document.getElementById('exportCompressionRecommendedDot'),
   exportWizardCancelBtn: document.getElementById('exportWizardCancelBtn'),
   exportWizardDownloadBtn: document.getElementById('exportWizardDownloadBtn'),
+  exportWizardDownloadLabel: document.getElementById('exportWizardDownloadLabel'),
+  exportWizardDownloadHint: document.getElementById('exportWizardDownloadHint'),
   aboutVersion: document.getElementById('aboutVersion'),
   aboutSignatureTitle: document.getElementById('aboutSignatureTitle'),
   feedbackToast: document.getElementById('feedbackToast'),
@@ -131,6 +133,7 @@ const state = {
   exportWizardTransparentAdjusting: false,
   exportWizardTransparentAdjustingControl: '',
   exportWizardTransparentPointerId: null,
+  exportWizardEstimatedOutputBytes: 0,
   exportWizardPreviewUrl: '',
   exportWizardPreviewToken: 0,
   exportWizardBusy: false,
@@ -489,6 +492,7 @@ function bindEvents() {
     elements.exportFormatSelect.addEventListener('change', () => {
       state.exportWizardFormat = normalizeExportFormat(elements.exportFormatSelect.value);
       state.exportWizardCompressionTouched = false;
+      updateExportWizardActionUi();
       void refreshExportWizardPreview();
       void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
     });
@@ -2083,6 +2087,7 @@ function syncExportFormatControlState() {
     elements.exportFormatSelect.value = state.exportWizardFormat;
     elements.exportFormatSelect.disabled = true;
     elements.exportFormatSelect.title = 'En preset favicon el format sempre es PNG';
+    updateExportWizardActionUi();
     return;
   }
   if (needsTransparency && normalizeExportFormat(state.exportWizardFormat) === 'image/jpeg') {
@@ -2095,6 +2100,7 @@ function syncExportFormatControlState() {
   } else {
     elements.exportFormatSelect.removeAttribute('title');
   }
+  updateExportWizardActionUi();
 }
 
 function resolveExportFormatForPreset(format, preset) {
@@ -2196,6 +2202,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardTransparentAdjusting = false;
   state.exportWizardTransparentAdjustingControl = '';
   state.exportWizardTransparentPointerId = null;
+  state.exportWizardEstimatedOutputBytes = 0;
   state.exportWizardRecommendationToken += 1;
   state.exportWizardBusy = false;
 
@@ -2210,6 +2217,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
   updateExportTransparentBackgroundUi();
   setExportRecommendedCompression(null);
   updateExportCompressionUi();
+  updateExportWizardActionUi();
   if (elements.exportWizardSourceName instanceof HTMLElement) {
     elements.exportWizardSourceName.textContent = itemName;
   }
@@ -2312,10 +2320,12 @@ function closeExportWizardModal() {
   state.exportWizardTransparentAdjusting = false;
   state.exportWizardTransparentAdjustingControl = '';
   state.exportWizardTransparentPointerId = null;
+  state.exportWizardEstimatedOutputBytes = 0;
   state.exportWizardBusy = false;
   setExportRecommendedCompression(null);
   updateExportCropUi();
   updateExportTransparentBackgroundUi();
+  updateExportWizardActionUi();
   if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
     elements.exportWizardPreviewImg.removeAttribute('src');
   }
@@ -2375,11 +2385,27 @@ async function refreshExportWizardPreview() {
       return;
     }
 
+    const actionAsset =
+      preset === EXPORT_PRESET_FAVICON && faviconMaxSize > 0 && faviconMaxSize !== exportPreviewSize
+        ? await renderImageExportAsset(state.exportWizardItem.dataUrl, {
+            format,
+            targetSize: faviconMaxSize,
+            quality,
+            pngCompression: state.exportWizardCompression,
+            ...editOptions
+          })
+        : metaAsset;
+    if (token !== state.exportWizardPreviewToken) {
+      return;
+    }
+
     const nextUrl = URL.createObjectURL(previewAsset.blob);
     if (state.exportWizardPreviewUrl) {
       URL.revokeObjectURL(state.exportWizardPreviewUrl);
     }
     state.exportWizardPreviewUrl = nextUrl;
+    state.exportWizardEstimatedOutputBytes = Math.max(0, Number(actionAsset.blob.size) || 0);
+    updateExportWizardActionUi();
 
     if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
       elements.exportWizardPreviewImg.src = nextUrl;
@@ -2416,6 +2442,8 @@ async function refreshExportWizardPreview() {
       return;
     }
     console.error('Export preview failed', error);
+    state.exportWizardEstimatedOutputBytes = 0;
+    updateExportWizardActionUi();
     if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
       elements.exportWizardPreviewMeta.textContent = 'No s\'ha pogut generar la previsualitzacio';
     }
@@ -2437,9 +2465,7 @@ async function exportWizardDownload() {
   }
 
   state.exportWizardBusy = true;
-  if (elements.exportWizardDownloadBtn instanceof HTMLButtonElement) {
-    elements.exportWizardDownloadBtn.disabled = true;
-  }
+  updateExportWizardActionUi();
 
   const preset = normalizeExportPreset(state.exportWizardPreset);
   const editOptions = getCurrentExportEditOptions();
@@ -2465,7 +2491,7 @@ async function exportWizardDownload() {
         });
         const bytes = new Uint8Array(await asset.blob.arrayBuffer());
         entries.push({
-          name: `${baseName}-${size}x${size}.${extension}`,
+          name: `${baseName}-${size}.${extension}`,
           bytes
         });
       }
@@ -2491,9 +2517,7 @@ async function exportWizardDownload() {
     showFeedbackToast('No s\'ha pogut exportar la imatge', 'error');
   } finally {
     state.exportWizardBusy = false;
-    if (elements.exportWizardDownloadBtn instanceof HTMLButtonElement) {
-      elements.exportWizardDownloadBtn.disabled = false;
-    }
+    updateExportWizardActionUi();
   }
 }
 
@@ -2987,6 +3011,53 @@ function exportFormatLabel(format) {
     return 'JPG';
   }
   return 'WebP';
+}
+
+function updateExportWizardActionUi() {
+  const preset = normalizeExportPreset(state.exportWizardPreset);
+  const editOptions = getCurrentExportEditOptions();
+  const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
+  const formatLabel = exportFormatLabel(format);
+  const isBusy = state.exportWizardBusy === true;
+  const originalBytes =
+    Math.max(0, Number(state.exportWizardItem?.fileSize) || 0) || getDataUrlByteLength(state.exportWizardItem?.dataUrl);
+  const estimatedBytes = Math.max(0, Number(state.exportWizardEstimatedOutputBytes) || 0);
+  let gainLabel = '';
+  if (originalBytes > 0 && estimatedBytes > 0) {
+    const deltaRatio = (estimatedBytes - originalBytes) / originalBytes;
+    const deltaPercent = Math.round(Math.abs(deltaRatio) * 100);
+    if (deltaPercent > 0) {
+      gainLabel = deltaRatio < 0 ? `${deltaPercent}% menos` : `${deltaPercent}% más`;
+    } else {
+      gainLabel = 'Mismo tamaño';
+    }
+  }
+  const title = isBusy
+    ? 'Exportando...'
+    : preset === EXPORT_PRESET_FAVICON
+      ? 'Exportar favicon pack'
+      : 'Exportar imagen';
+  const hint = isBusy
+    ? 'Preparando la descarga'
+    : preset === EXPORT_PRESET_FAVICON
+      ? gainLabel
+        ? `${formatLabel} · ${gainLabel}`
+        : `${formatLabel} · ZIP multimida`
+      : gainLabel
+        ? `${formatLabel} · ${gainLabel}`
+        : `${formatLabel} · Descarga directa`;
+
+  if (elements.exportWizardDownloadBtn instanceof HTMLButtonElement) {
+    elements.exportWizardDownloadBtn.disabled = isBusy;
+    elements.exportWizardDownloadBtn.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+    elements.exportWizardDownloadBtn.title = title;
+  }
+  if (elements.exportWizardDownloadLabel instanceof HTMLElement) {
+    elements.exportWizardDownloadLabel.textContent = title;
+  }
+  if (elements.exportWizardDownloadHint instanceof HTMLElement) {
+    elements.exportWizardDownloadHint.textContent = hint;
+  }
 }
 
 async function downloadBlobAsset(blob, filename) {
@@ -3829,6 +3900,13 @@ function createImageCard(item, options = {}) {
   button.title = item.name;
 
   const thumbWrap = createThumbWrap(item, options);
+  const exportButton = createImageExportButton(item, {
+    manual: Boolean(options.manual),
+    galleryId: options.manual ? MANUAL_GALLERY_ID : ''
+  });
+  if (exportButton) {
+    thumbWrap.appendChild(exportButton);
+  }
   const name = document.createElement('span');
   name.className = 'logo-library-name';
   name.textContent = item.name;
@@ -3857,14 +3935,6 @@ function createImageCard(item, options = {}) {
     card.appendChild(highlightButton);
   }
 
-  const exportButton = createImageExportButton(item, {
-    manual: Boolean(options.manual),
-    galleryId: options.manual ? MANUAL_GALLERY_ID : ''
-  });
-  if (exportButton) {
-    card.appendChild(exportButton);
-  }
-
   return card;
 }
 
@@ -3887,7 +3957,7 @@ function createImageExportButton(item, options = {}) {
   const imageName = String(item?.name || 'imatge');
   button.setAttribute('aria-label', `Export wizard ${imageName}`);
   button.title = 'Export wizard';
-  button.innerHTML = '<i class="bi bi-magic" aria-hidden="true"></i>';
+  button.innerHTML = '<i class="bi bi-stars" aria-hidden="true"></i>';
   return button;
 }
 

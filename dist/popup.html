@@ -274,9 +274,17 @@
               <span id="exportCompressionValue" class="export-compression-value">72%</span>
             </div>
           </div>
-          <div class="save-as-modal-actions">
-            <button id="exportWizardCancelBtn" class="btn btn-outline-secondary btn-sm" type="button">Cerrar</button>
-            <button id="exportWizardDownloadBtn" class="btn btn-primary btn-sm" type="button">Exportar</button>
+          <div class="export-wizard-actions">
+            <button id="exportWizardDownloadBtn" class="export-primary-cta" type="button">
+              <span class="export-primary-cta-icon" aria-hidden="true">
+                <i class="bi bi-download"></i>
+              </span>
+              <span class="export-primary-cta-copy">
+                <span id="exportWizardDownloadLabel" class="export-primary-cta-title">Exportar</span>
+                <span id="exportWizardDownloadHint" class="export-primary-cta-subtitle">Descargar archivo</span>
+              </span>
+            </button>
+            <button id="exportWizardCancelBtn" class="btn btn-outline-secondary btn-sm export-secondary-cta" type="button">Cerrar</button>
           </div>
         </div>
       </div>
