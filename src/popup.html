@@ -188,17 +188,24 @@
           </div>
           <p id="exportWizardOriginalMeta" class="export-wizard-meta"></p>
           <p id="exportWizardPreviewMeta" class="export-wizard-meta"></p>
-          <label for="exportFormatSelect" class="save-as-modal-label">Selector de Formato</label>
-          <select id="exportFormatSelect" class="save-as-modal-input">
-            <option value="image/webp">WebP</option>
-            <option value="image/png">PNG</option>
-            <option value="image/jpeg">JPG</option>
-          </select>
           <label for="exportPresetSelect" class="save-as-modal-label">Presets de Tamaño</label>
           <select id="exportPresetSelect" class="save-as-modal-input">
             <option value="original">Original</option>
             <option value="favicon">Favicon (ZIP multimida)</option>
           </select>
+          <div class="export-format-compression-compact">
+            <label for="exportFormatSelect" class="save-as-modal-label export-format-label">Formato</label>
+            <label for="exportCompressionRange" class="save-as-modal-label">Compresión</label>
+            <select id="exportFormatSelect" class="save-as-modal-input export-inline-format-select">
+              <option value="image/webp">WebP</option>
+              <option value="image/png">PNG</option>
+              <option value="image/jpeg">JPG</option>
+            </select>
+            <div class="export-compression-row">
+              <input id="exportCompressionRange" class="export-compression-range" type="range" min="0" max="100" step="1" value="72" />
+              <span id="exportCompressionValue" class="export-compression-value">72%</span>
+            </div>
+          </div>
           <div class="save-as-modal-actions">
             <button id="exportWizardCancelBtn" class="btn btn-outline-secondary btn-sm" type="button">Cerrar</button>
             <button id="exportWizardDownloadBtn" class="btn btn-primary btn-sm" type="button">Exportar</button>

@@ -1,3 +1,5 @@
+import { zipSync } from 'fflate';
+
 const VIEW_WEB = 'web';
 const VIEW_LIBRARY = 'library';
 const STORAGE_KEY_MANUAL_LIBRARY = 'manualImageLibrary';
@@ -7,8 +9,10 @@ const MANUAL_GALLERY_ID = 'manual-gallery';
 const EXPORT_PRESET_ORIGINAL = 'original';
 const EXPORT_PRESET_FAVICON = 'favicon';
 const EXPORT_DEFAULT_FORMAT = 'image/webp';
-const EXPORT_DEFAULT_QUALITY = 0.82;
-const EXPORT_FAVICON_QUALITY = 1;
+const EXPORT_DEFAULT_COMPRESSION = 72;
+const EXPORT_MIN_QUALITY = 0.36;
+const EXPORT_MAX_QUALITY = 0.98;
+const ZIP_MAX_COMPRESSION_LEVEL = 9;
 const FAVICON_PRESET_SIZES = [16, 32, 48, 64, 128, 180, 192, 256, 512];
 
 const elements = {
@@ -53,6 +57,8 @@ const elements = {
   exportWizardPreviewMeta: document.getElementById('exportWizardPreviewMeta'),
   exportFormatSelect: document.getElementById('exportFormatSelect'),
   exportPresetSelect: document.getElementById('exportPresetSelect'),
+  exportCompressionRange: document.getElementById('exportCompressionRange'),
+  exportCompressionValue: document.getElementById('exportCompressionValue'),
   exportWizardCancelBtn: document.getElementById('exportWizardCancelBtn'),
   exportWizardDownloadBtn: document.getElementById('exportWizardDownloadBtn'),
   aboutVersion: document.getElementById('aboutVersion'),
@@ -81,6 +87,7 @@ const state = {
   exportWizardItem: null,
   exportWizardFormat: EXPORT_DEFAULT_FORMAT,
   exportWizardPreset: EXPORT_PRESET_ORIGINAL,
+  exportWizardCompression: EXPORT_DEFAULT_COMPRESSION,
   exportWizardPreviewUrl: '',
   exportWizardPreviewToken: 0,
   exportWizardBusy: false,
@@ -261,6 +268,14 @@ function bindEvents() {
           elements.exportFormatSelect.value = state.exportWizardFormat;
         }
       }
+      void refreshExportWizardPreview();
+    });
+  }
+
+  if (elements.exportCompressionRange instanceof HTMLInputElement) {
+    elements.exportCompressionRange.addEventListener('input', () => {
+      state.exportWizardCompression = normalizeExportCompression(elements.exportCompressionRange.value);
+      updateExportCompressionUi();
       void refreshExportWizardPreview();
     });
   }
@@ -796,6 +811,36 @@ function normalizeExportPreset(value) {
   return safe === EXPORT_PRESET_FAVICON ? EXPORT_PRESET_FAVICON : EXPORT_PRESET_ORIGINAL;
 }
 
+function normalizeExportCompression(value) {
+  const raw = Math.round(Number(value));
+  if (!Number.isFinite(raw)) {
+    return EXPORT_DEFAULT_COMPRESSION;
+  }
+  return Math.max(0, Math.min(100, raw));
+}
+
+function resolveLossyQualityFromCompression(compression) {
+  const safeCompression = normalizeExportCompression(compression);
+  const ratio = safeCompression / 100;
+  const quality = EXPORT_MAX_QUALITY - ratio * (EXPORT_MAX_QUALITY - EXPORT_MIN_QUALITY);
+  return Math.min(1, Math.max(0.05, Number(quality.toFixed(4))));
+}
+
+function resolveZipCompressionLevel(compression) {
+  const safeCompression = normalizeExportCompression(compression);
+  return Math.max(0, Math.min(ZIP_MAX_COMPRESSION_LEVEL, Math.round((safeCompression / 100) * ZIP_MAX_COMPRESSION_LEVEL)));
+}
+
+function updateExportCompressionUi() {
+  const safeCompression = normalizeExportCompression(state.exportWizardCompression);
+  if (elements.exportCompressionRange instanceof HTMLInputElement) {
+    elements.exportCompressionRange.value = String(safeCompression);
+  }
+  if (elements.exportCompressionValue instanceof HTMLElement) {
+    elements.exportCompressionValue.textContent = `${safeCompression}%`;
+  }
+}
+
 function resolveExportFormatForPreset(format, preset) {
   const safePreset = normalizeExportPreset(preset);
   if (safePreset === EXPORT_PRESET_FAVICON) {
@@ -804,13 +849,12 @@ function resolveExportFormatForPreset(format, preset) {
   return normalizeExportFormat(format);
 }
 
-function resolveExportQuality(format, preset) {
+function resolveExportQuality(format, preset, compression) {
   const safeFormat = resolveExportFormatForPreset(format, preset);
   if (safeFormat !== 'image/jpeg' && safeFormat !== 'image/webp') {
     return undefined;
   }
-  const safePreset = normalizeExportPreset(preset);
-  return safePreset === EXPORT_PRESET_FAVICON ? EXPORT_FAVICON_QUALITY : EXPORT_DEFAULT_QUALITY;
+  return resolveLossyQualityFromCompression(compression);
 }
 
 function resolveFaviconMaxSourceSize(item) {
@@ -852,6 +896,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
   };
   state.exportWizardFormat = EXPORT_DEFAULT_FORMAT;
   state.exportWizardPreset = EXPORT_PRESET_ORIGINAL;
+  state.exportWizardCompression = EXPORT_DEFAULT_COMPRESSION;
   state.exportWizardBusy = false;
 
   if (elements.exportFormatSelect instanceof HTMLSelectElement) {
@@ -860,6 +905,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
   if (elements.exportPresetSelect instanceof HTMLSelectElement) {
     elements.exportPresetSelect.value = state.exportWizardPreset;
   }
+  updateExportCompressionUi();
   if (elements.exportWizardSourceName instanceof HTMLElement) {
     elements.exportWizardSourceName.textContent = itemName;
   }
@@ -971,7 +1017,7 @@ async function refreshExportWizardPreview() {
     preset === EXPORT_PRESET_FAVICON
       ? Math.min(128, resolveFaviconMaxSourceSize(state.exportWizardItem))
       : 0;
-  const quality = resolveExportQuality(format, preset);
+  const quality = resolveExportQuality(format, preset, state.exportWizardCompression);
 
   try {
     const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
@@ -998,8 +1044,14 @@ async function refreshExportWizardPreview() {
         preset === EXPORT_PRESET_FAVICON
           ? 'Preset favicon (exporta ZIP amb totes les mides)'
           : 'Mida original';
+      const compressionLabel =
+        preset === EXPORT_PRESET_FAVICON
+          ? `ZIP DEFLATE ${resolveZipCompressionLevel(state.exportWizardCompression)}/${ZIP_MAX_COMPRESSION_LEVEL}`
+          : format === 'image/png'
+            ? 'PNG sense pèrdua'
+            : `Compressio ${normalizeExportCompression(state.exportWizardCompression)}%`;
       elements.exportWizardPreviewMeta.textContent =
-        `Preview ${asset.width}x${asset.height}px · ${formatLabel} · ${formatBytes(asset.blob.size)} · ${presetLabel}`;
+        `Preview ${asset.width}x${asset.height}px · ${formatLabel} · ${formatBytes(asset.blob.size)} · ${presetLabel} · ${compressionLabel}`;
     }
   } catch (error) {
     if (token !== state.exportWizardPreviewToken) {
@@ -1033,7 +1085,7 @@ async function exportWizardDownload() {
 
   const preset = normalizeExportPreset(state.exportWizardPreset);
   const format = resolveExportFormatForPreset(state.exportWizardFormat, preset);
-  const quality = resolveExportQuality(format, preset);
+  const quality = resolveExportQuality(format, preset, state.exportWizardCompression);
   const extension = exportExtensionFromFormat(format);
 
   try {
@@ -1056,7 +1108,9 @@ async function exportWizardDownload() {
           bytes
         });
       }
-      const zipBlob = createZipBlob(entries);
+      const zipBlob = createZipBlob(entries, {
+        compressionPercent: state.exportWizardCompression
+      });
       await downloadBlobAsset(zipBlob, `${baseName}-favicon-pack.zip`);
       showFeedbackToast(`Export ZIP favicon (${entries.length} mides)`);
       return;
@@ -1143,7 +1197,7 @@ async function renderImageExportAsset(dataUrl, options = {}) {
   const quality = needsQuality
     ? Number.isFinite(requestedQuality)
       ? Math.min(1, Math.max(0, requestedQuality))
-      : EXPORT_DEFAULT_QUALITY
+      : resolveLossyQualityFromCompression(EXPORT_DEFAULT_COMPRESSION)
     : undefined;
   const blob = await canvasToBlobAsync(canvas, format, quality);
   return { blob, width, height };
@@ -1821,15 +1875,14 @@ function ensureUniqueArchiveName(name, usedNames) {
   return fallback;
 }
 
-function createZipBlob(entries) {
+function createZipBlob(entries, options = {}) {
   const safeEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
-  const localParts = [];
-  const centralParts = [];
-  let localOffset = 0;
-  let centralSize = 0;
-  const now = new Date();
-  const dosTime = getDosTime(now);
-  const dosDate = getDosDate(now);
+  const compressionPercent =
+    options && Object.prototype.hasOwnProperty.call(options, 'compressionPercent')
+      ? normalizeExportCompression(options.compressionPercent)
+      : 100;
+  const compressionLevel = resolveZipCompressionLevel(compressionPercent);
+  const zipInput = {};
 
   for (const entry of safeEntries) {
     const fileName = String(entry?.name || '').trim();
@@ -1837,134 +1890,11 @@ function createZipBlob(entries) {
     if (!fileName || !data) {
       continue;
     }
-
-    const fileNameBytes = new TextEncoder().encode(fileName);
-    const crc = crc32(data);
-    const localHeader = createZipLocalHeader({
-      fileNameBytes,
-      dosTime,
-      dosDate,
-      crc,
-      size: data.length
-    });
-    localParts.push(localHeader, data);
-
-    const centralHeader = createZipCentralHeader({
-      fileNameBytes,
-      dosTime,
-      dosDate,
-      crc,
-      size: data.length,
-      localOffset
-    });
-    centralParts.push(centralHeader);
-    centralSize += centralHeader.length;
-    localOffset += localHeader.length + data.length;
+    zipInput[fileName] = [data, { level: compressionLevel }];
   }
 
-  const entryCount = centralParts.length;
-  const centralOffset = localOffset;
-  const endRecord = createZipEndRecord({
-    entryCount,
-    centralSize,
-    centralOffset
-  });
-
-  return new Blob([...localParts, ...centralParts, endRecord], { type: 'application/zip' });
-}
-
-function createZipLocalHeader({ fileNameBytes, dosTime, dosDate, crc, size }) {
-  const header = new Uint8Array(30 + fileNameBytes.length);
-  const view = new DataView(header.buffer);
-  view.setUint32(0, 0x04034b50, true);
-  view.setUint16(4, 20, true);
-  view.setUint16(6, 0x0800, true);
-  view.setUint16(8, 0, true);
-  view.setUint16(10, dosTime, true);
-  view.setUint16(12, dosDate, true);
-  view.setUint32(14, crc, true);
-  view.setUint32(18, size, true);
-  view.setUint32(22, size, true);
-  view.setUint16(26, fileNameBytes.length, true);
-  view.setUint16(28, 0, true);
-  header.set(fileNameBytes, 30);
-  return header;
-}
-
-function createZipCentralHeader({ fileNameBytes, dosTime, dosDate, crc, size, localOffset }) {
-  const header = new Uint8Array(46 + fileNameBytes.length);
-  const view = new DataView(header.buffer);
-  view.setUint32(0, 0x02014b50, true);
-  view.setUint16(4, 20, true);
-  view.setUint16(6, 20, true);
-  view.setUint16(8, 0x0800, true);
-  view.setUint16(10, 0, true);
-  view.setUint16(12, dosTime, true);
-  view.setUint16(14, dosDate, true);
-  view.setUint32(16, crc, true);
-  view.setUint32(20, size, true);
-  view.setUint32(24, size, true);
-  view.setUint16(28, fileNameBytes.length, true);
-  view.setUint16(30, 0, true);
-  view.setUint16(32, 0, true);
-  view.setUint16(34, 0, true);
-  view.setUint16(36, 0, true);
-  view.setUint32(38, 0, true);
-  view.setUint32(42, localOffset, true);
-  header.set(fileNameBytes, 46);
-  return header;
-}
-
-function createZipEndRecord({ entryCount, centralSize, centralOffset }) {
-  const record = new Uint8Array(22);
-  const view = new DataView(record.buffer);
-  const safeEntryCount = Math.max(0, Math.min(0xffff, Number(entryCount) || 0));
-  view.setUint32(0, 0x06054b50, true);
-  view.setUint16(4, 0, true);
-  view.setUint16(6, 0, true);
-  view.setUint16(8, safeEntryCount, true);
-  view.setUint16(10, safeEntryCount, true);
-  view.setUint32(12, Math.max(0, Number(centralSize) || 0), true);
-  view.setUint32(16, Math.max(0, Number(centralOffset) || 0), true);
-  view.setUint16(20, 0, true);
-  return record;
-}
-
-function getDosTime(date) {
-  const safeDate = date instanceof Date ? date : new Date();
-  const hours = safeDate.getHours();
-  const minutes = safeDate.getMinutes();
-  const seconds = Math.floor(safeDate.getSeconds() / 2);
-  return (hours << 11) | (minutes << 5) | seconds;
-}
-
-function getDosDate(date) {
-  const safeDate = date instanceof Date ? date : new Date();
-  const year = Math.max(1980, safeDate.getFullYear()) - 1980;
-  const month = safeDate.getMonth() + 1;
-  const day = safeDate.getDate();
-  return (year << 9) | (month << 5) | day;
-}
-
-const CRC32_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i += 1) {
-    let c = i;
-    for (let bit = 0; bit < 8; bit += 1) {
-      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-    }
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (let index = 0; index < bytes.length; index += 1) {
-    const code = (crc ^ bytes[index]) & 0xff;
-    crc = (crc >>> 8) ^ CRC32_TABLE[code];
-  }
-  return (crc ^ 0xffffffff) >>> 0;
+  const zipped = zipSync(zipInput, { level: compressionLevel });
+  return new Blob([zipped], { type: 'application/zip' });
 }
 
 function getStoredItemSizeBytes(item) {

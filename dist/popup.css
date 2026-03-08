@@ -2459,10 +2459,12 @@ select:disabled {
   place-items: center;
   padding: 14px;
   background: rgba(15, 23, 42, 0.45);
+  overflow: hidden;
 }
 
 .save-as-modal-card {
   width: min(100%, 360px);
+  max-height: calc(100% - 2px);
   border: 1px solid #cbd5e1;
   border-radius: 12px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
@@ -2470,6 +2472,9 @@ select:disabled {
   padding: 12px;
   display: grid;
   gap: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .save-as-modal-title {
@@ -2512,6 +2517,7 @@ select:disabled {
 
 .export-wizard-card {
   width: min(100%, 430px);
+  max-height: calc(100% - 2px);
 }
 
 .export-wizard-source-name {
@@ -2526,7 +2532,9 @@ select:disabled {
 
 .export-wizard-preview-wrap {
   width: 100%;
-  min-height: 150px;
+  min-height: 110px;
+  height: clamp(110px, 23vh, 150px);
+  padding: 8px;
   border: 1px solid #cbd5e1;
   border-radius: 10px;
   background:
@@ -2539,9 +2547,12 @@ select:disabled {
 }
 
 .export-wizard-preview-img {
-  width: 100%;
-  max-height: 210px;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
+  display: block;
 }
 
 .export-wizard-meta {
@@ -2549,6 +2560,51 @@ select:disabled {
   font-size: 11px;
   line-height: 1.3;
   color: #334155;
+}
+
+.export-format-compression-compact {
+  display: grid;
+  grid-template-columns: minmax(88px, 120px) minmax(0, 1fr);
+  grid-template-areas:
+    "formatLabel compressionLabel"
+    "formatControl compressionControl";
+  column-gap: 8px;
+  row-gap: 6px;
+  align-items: center;
+}
+
+.export-format-label {
+  grid-area: formatLabel;
+}
+
+.export-format-compression-compact > label[for="exportCompressionRange"] {
+  grid-area: compressionLabel;
+}
+
+.export-inline-format-select {
+  grid-area: formatControl;
+  min-height: 34px;
+}
+
+.export-compression-row {
+  grid-area: compressionControl;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.export-compression-range {
+  width: 100%;
+  accent-color: #2563eb;
+}
+
+.export-compression-value {
+  min-width: 40px;
+  text-align: right;
+  font-size: 11px;
+  font-weight: 700;
+  color: #1e293b;
 }
 
 .standalone-page {
