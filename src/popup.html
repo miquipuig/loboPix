@@ -188,6 +188,28 @@
             <button id="exportCropToggleBtn" class="export-crop-toolbar-btn" type="button" aria-label="Activar recorte" aria-pressed="false" title="Recortar">
               <i class="bi bi-crop" aria-hidden="true"></i>
             </button>
+            <div class="export-transparent-control">
+              <button id="exportTransparentBgBtn" class="export-crop-toolbar-btn export-transparent-toolbar-btn" type="button" aria-label="Fondo transparente" aria-pressed="false" title="Fondo transparente">
+                <i class="bi bi-circle-half" aria-hidden="true"></i>
+              </button>
+              <div id="exportTransparentBgPopover" class="export-floating-control" aria-hidden="true">
+                <div
+                  id="exportTransparentBgSlider"
+                  class="export-transparent-slider"
+                  tabindex="0"
+                  role="slider"
+                  aria-label="Sensibilidad del fondo transparente"
+                  aria-valuemin="0"
+                  aria-valuemax="120"
+                  aria-valuenow="0"
+                >
+                  <span class="export-transparent-slider-track" aria-hidden="true"></span>
+                  <span id="exportTransparentBgSliderFill" class="export-transparent-slider-fill" aria-hidden="true"></span>
+                  <span id="exportTransparentBgSliderThumb" class="export-transparent-slider-thumb" aria-hidden="true"></span>
+                </div>
+                <span id="exportTransparentBgToleranceValue" class="export-tool-value export-tool-value-centered">0</span>
+              </div>
+            </div>
             <div id="exportCropStage" class="export-crop-stage hidden" aria-hidden="true">
               <img id="exportCropEditorImg" class="export-crop-editor-img" alt="Editor de recorte" />
               <div id="exportCropBox" class="export-crop-box hidden">
@@ -212,22 +234,6 @@
             <option value="original">Original</option>
             <option value="favicon">Favicon (ZIP multimida)</option>
           </select>
-          <div class="export-wizard-tools">
-            <section class="export-wizard-tool-group" aria-labelledby="exportTransparentBgTitle">
-              <label id="exportTransparentBgTitle" class="export-tool-toggle" for="exportTransparentBgToggle">
-                <input id="exportTransparentBgToggle" type="checkbox" />
-                <span>Fondo transparente</span>
-              </label>
-              <div id="exportTransparentBgControls" class="export-tool-panel hidden">
-                <div class="export-tool-slider-grid export-tool-slider-grid-single">
-                  <label for="exportTransparentBgToleranceRange" class="save-as-modal-label">Sensibilidad</label>
-                  <input id="exportTransparentBgToleranceRange" class="export-compression-range export-tool-range" type="range" min="0" max="120" step="1" value="20" />
-                  <span id="exportTransparentBgToleranceValue" class="export-tool-value">20</span>
-                </div>
-                <p class="export-tool-hint">Hace transparente el fondo conectado al borde. JPG se cambia a PNG si activas esta opción.</p>
-              </div>
-            </section>
-          </div>
           <div class="export-format-compression-compact">
             <label for="exportFormatSelect" class="save-as-modal-label export-format-label">Formato</label>
             <label for="exportCompressionRange" class="save-as-modal-label">Compresión</label>

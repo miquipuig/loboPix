@@ -2541,7 +2541,7 @@ select:disabled {
   background:
     linear-gradient(45deg, #f8fafc 25%, #eef2f7 25%, #eef2f7 50%, #f8fafc 50%, #f8fafc 75%, #eef2f7 75%, #eef2f7 100%)
     0 0 / 14px 14px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .export-wizard-preview-img {
@@ -2595,6 +2595,95 @@ select:disabled {
 .export-crop-toolbar-btn .bi {
   font-size: 15px;
   line-height: 1;
+}
+
+.export-transparent-control {
+  position: absolute;
+  top: 56px;
+  left: 14px;
+  z-index: 40;
+}
+
+.export-transparent-toolbar-btn {
+  position: relative;
+  top: 0;
+  left: 0;
+}
+
+.export-floating-control {
+  position: absolute;
+  left: 26px;
+  top: 50%;
+  z-index: 60;
+  transform: translateY(-50%);
+  width: 28px;
+  padding: 8px 3px 6px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.12);
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease;
+}
+
+.export-transparent-control:hover .export-floating-control,
+.export-transparent-control:focus-within .export-floating-control,
+.export-transparent-control.adjusting .export-floating-control {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.export-transparent-slider {
+  position: relative;
+  width: 14px;
+  height: 122px;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+}
+
+.export-transparent-slider-track,
+.export-transparent-slider-fill {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  border-radius: 999px;
+}
+
+.export-transparent-slider-track {
+  top: 0;
+  bottom: 0;
+  background: #bfdbfe;
+}
+
+.export-transparent-slider-fill {
+  bottom: 0;
+  height: 0;
+  background: #2563eb;
+}
+
+.export-transparent-slider-thumb {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, 50%);
+  border-radius: 999px;
+  border: 2px solid #ffffff;
+  background: #2563eb;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.35);
+}
+
+.export-transparent-slider:focus-visible .export-transparent-slider-thumb {
+  box-shadow:
+    0 0 0 1px rgba(37, 99, 235, 0.35),
+    0 0 0 4px rgba(59, 130, 246, 0.18);
 }
 
 .export-crop-stage {
@@ -2735,40 +2824,6 @@ select:disabled {
   overflow: hidden;
 }
 
-.export-wizard-tools {
-  display: grid;
-  gap: 8px;
-}
-
-.export-wizard-tool-group {
-  padding: 8px;
-  border: 1px solid #dbe4ee;
-  border-radius: 8px;
-  background: rgba(248, 250, 252, 0.92);
-  display: grid;
-  gap: 8px;
-}
-
-.export-tool-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  font-size: 12px;
-  font-weight: 700;
-  color: #0f172a;
-}
-
-.export-tool-toggle input[type="checkbox"] {
-  margin: 0;
-  accent-color: #2563eb;
-}
-
-.export-tool-panel {
-  display: grid;
-  gap: 8px;
-}
-
 .export-tool-slider-grid {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) 48px;
@@ -2780,10 +2835,6 @@ select:disabled {
   grid-template-columns: 78px minmax(0, 1fr) 40px;
 }
 
-.export-tool-range {
-  min-width: 0;
-}
-
 .export-tool-value {
   font-size: 11px;
   line-height: 1;
@@ -2792,11 +2843,9 @@ select:disabled {
   color: #1e293b;
 }
 
-.export-tool-hint {
-  margin: 0;
-  font-size: 10px;
-  line-height: 1.35;
-  color: #64748b;
+.export-tool-value-centered {
+  min-width: 0;
+  text-align: center;
 }
 
 .export-format-compression-compact {
