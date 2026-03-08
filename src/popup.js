@@ -255,6 +255,12 @@ function bindEvents() {
   if (elements.exportPresetSelect instanceof HTMLSelectElement) {
     elements.exportPresetSelect.addEventListener('change', () => {
       state.exportWizardPreset = normalizeExportPreset(elements.exportPresetSelect.value);
+      if (state.exportWizardPreset === EXPORT_PRESET_FAVICON) {
+        state.exportWizardFormat = 'image/png';
+        if (elements.exportFormatSelect instanceof HTMLSelectElement) {
+          elements.exportFormatSelect.value = state.exportWizardFormat;
+        }
+      }
       void refreshExportWizardPreview();
     });
   }
@@ -790,13 +796,40 @@ function normalizeExportPreset(value) {
   return safe === EXPORT_PRESET_FAVICON ? EXPORT_PRESET_FAVICON : EXPORT_PRESET_ORIGINAL;
 }
 
+function resolveExportFormatForPreset(format, preset) {
+  const safePreset = normalizeExportPreset(preset);
+  if (safePreset === EXPORT_PRESET_FAVICON) {
+    return 'image/png';
+  }
+  return normalizeExportFormat(format);
+}
+
 function resolveExportQuality(format, preset) {
-  const safeFormat = normalizeExportFormat(format);
+  const safeFormat = resolveExportFormatForPreset(format, preset);
   if (safeFormat !== 'image/jpeg' && safeFormat !== 'image/webp') {
     return undefined;
   }
   const safePreset = normalizeExportPreset(preset);
   return safePreset === EXPORT_PRESET_FAVICON ? EXPORT_FAVICON_QUALITY : EXPORT_DEFAULT_QUALITY;
+}
+
+function resolveFaviconMaxSourceSize(item) {
+  const width = Math.max(0, Number(item?.width) || 0);
+  const height = Math.max(0, Number(item?.height) || 0);
+  return Math.max(0, Math.min(width, height));
+}
+
+function resolveFaviconExportSizes(item) {
+  const maxSourceSize = resolveFaviconMaxSourceSize(item);
+  if (maxSourceSize <= 0) {
+    return [];
+  }
+  const sizes = FAVICON_PRESET_SIZES.filter((size) => Number(size) > 0 && Number(size) <= maxSourceSize);
+  const roundedOriginal = Math.max(1, Math.floor(maxSourceSize));
+  if (!sizes.includes(roundedOriginal)) {
+    sizes.push(roundedOriginal);
+  }
+  return Array.from(new Set(sizes)).sort((left, right) => left - right);
 }
 
 function openExportWizardFromImageId(imageId, options = {}) {
@@ -932,9 +965,12 @@ async function refreshExportWizardPreview() {
     elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
   }
 
-  const format = normalizeExportFormat(state.exportWizardFormat);
   const preset = normalizeExportPreset(state.exportWizardPreset);
-  const previewSize = preset === EXPORT_PRESET_FAVICON ? 128 : 0;
+  const format = resolveExportFormatForPreset(state.exportWizardFormat, preset);
+  const previewSize =
+    preset === EXPORT_PRESET_FAVICON
+      ? Math.min(128, resolveFaviconMaxSourceSize(state.exportWizardItem))
+      : 0;
   const quality = resolveExportQuality(format, preset);
 
   try {
@@ -995,15 +1031,20 @@ async function exportWizardDownload() {
     elements.exportWizardDownloadBtn.disabled = true;
   }
 
-  const format = normalizeExportFormat(state.exportWizardFormat);
   const preset = normalizeExportPreset(state.exportWizardPreset);
+  const format = resolveExportFormatForPreset(state.exportWizardFormat, preset);
   const quality = resolveExportQuality(format, preset);
   const extension = exportExtensionFromFormat(format);
 
   try {
     if (preset === EXPORT_PRESET_FAVICON) {
+      const faviconSizes = resolveFaviconExportSizes(state.exportWizardItem);
+      if (faviconSizes.length === 0) {
+        showFeedbackToast('No s\'ha pogut calcular mides favicon valides', 'error');
+        return;
+      }
       const entries = [];
-      for (const size of FAVICON_PRESET_SIZES) {
+      for (const size of faviconSizes) {
         const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
           format,
           targetSize: Number(size) || 0,
@@ -1017,7 +1058,7 @@ async function exportWizardDownload() {
       }
       const zipBlob = createZipBlob(entries);
       await downloadBlobAsset(zipBlob, `${baseName}-favicon-pack.zip`);
-      showFeedbackToast(`Export ZIP favicon (${FAVICON_PRESET_SIZES.length} mides)`);
+      showFeedbackToast(`Export ZIP favicon (${entries.length} mides)`);
       return;
     }
 
