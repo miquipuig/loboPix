@@ -202,7 +202,11 @@
               <option value="image/jpeg">JPG</option>
             </select>
             <div class="export-compression-row">
-              <input id="exportCompressionRange" class="export-compression-range" type="range" min="0" max="100" step="1" value="72" />
+              <div class="export-compression-track">
+                <div class="export-compression-ticks" aria-hidden="true"></div>
+                <input id="exportCompressionRange" class="export-compression-range" type="range" min="0" max="100" step="1" value="72" />
+                <span id="exportCompressionRecommendedDot" class="export-compression-recommended-dot hidden" aria-hidden="true"></span>
+              </div>
               <span id="exportCompressionValue" class="export-compression-value">72%</span>
             </div>
           </div>

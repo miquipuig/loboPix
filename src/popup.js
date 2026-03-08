@@ -1,4 +1,5 @@
 import { zipSync } from 'fflate';
+import UPNG from 'upng-js';
 
 const VIEW_WEB = 'web';
 const VIEW_LIBRARY = 'library';
@@ -10,10 +11,18 @@ const EXPORT_PRESET_ORIGINAL = 'original';
 const EXPORT_PRESET_FAVICON = 'favicon';
 const EXPORT_DEFAULT_FORMAT = 'image/webp';
 const EXPORT_DEFAULT_COMPRESSION = 72;
-const EXPORT_MIN_QUALITY = 0.36;
-const EXPORT_MAX_QUALITY = 0.98;
+const EXPORT_MIN_QUALITY = 0.05;
+const EXPORT_MAX_QUALITY = 1;
 const ZIP_MAX_COMPRESSION_LEVEL = 9;
 const FAVICON_PRESET_SIZES = [16, 32, 48, 64, 128, 180, 192, 256, 512];
+const EXPORT_RECOMMENDATION_CANDIDATES = [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96];
+const EXPORT_RECOMMENDATION_MAX_EDGE = 256;
+const EXPORT_RECOMMENDATION_ERROR_THRESHOLD = {
+  'image/png': 14,
+  'image/webp': 20,
+  'image/jpeg': 24
+};
+const exportCompressionRecommendationCache = new Map();
 
 const elements = {
   popupRoot: document.getElementById('popupRoot'),
@@ -59,6 +68,7 @@ const elements = {
   exportPresetSelect: document.getElementById('exportPresetSelect'),
   exportCompressionRange: document.getElementById('exportCompressionRange'),
   exportCompressionValue: document.getElementById('exportCompressionValue'),
+  exportCompressionRecommendedDot: document.getElementById('exportCompressionRecommendedDot'),
   exportWizardCancelBtn: document.getElementById('exportWizardCancelBtn'),
   exportWizardDownloadBtn: document.getElementById('exportWizardDownloadBtn'),
   aboutVersion: document.getElementById('aboutVersion'),
@@ -88,6 +98,9 @@ const state = {
   exportWizardFormat: EXPORT_DEFAULT_FORMAT,
   exportWizardPreset: EXPORT_PRESET_ORIGINAL,
   exportWizardCompression: EXPORT_DEFAULT_COMPRESSION,
+  exportWizardRecommendedCompression: null,
+  exportWizardRecommendationToken: 0,
+  exportWizardCompressionTouched: false,
   exportWizardPreviewUrl: '',
   exportWizardPreviewToken: 0,
   exportWizardBusy: false,
@@ -255,26 +268,26 @@ function bindEvents() {
   if (elements.exportFormatSelect instanceof HTMLSelectElement) {
     elements.exportFormatSelect.addEventListener('change', () => {
       state.exportWizardFormat = normalizeExportFormat(elements.exportFormatSelect.value);
+      state.exportWizardCompressionTouched = false;
       void refreshExportWizardPreview();
+      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
     });
   }
 
   if (elements.exportPresetSelect instanceof HTMLSelectElement) {
     elements.exportPresetSelect.addEventListener('change', () => {
       state.exportWizardPreset = normalizeExportPreset(elements.exportPresetSelect.value);
-      if (state.exportWizardPreset === EXPORT_PRESET_FAVICON) {
-        state.exportWizardFormat = 'image/png';
-        if (elements.exportFormatSelect instanceof HTMLSelectElement) {
-          elements.exportFormatSelect.value = state.exportWizardFormat;
-        }
-      }
+      syncExportFormatControlState();
+      state.exportWizardCompressionTouched = false;
       void refreshExportWizardPreview();
+      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
     });
   }
 
   if (elements.exportCompressionRange instanceof HTMLInputElement) {
     elements.exportCompressionRange.addEventListener('input', () => {
       state.exportWizardCompression = normalizeExportCompression(elements.exportCompressionRange.value);
+      state.exportWizardCompressionTouched = true;
       updateExportCompressionUi();
       void refreshExportWizardPreview();
     });
@@ -822,13 +835,25 @@ function normalizeExportCompression(value) {
 function resolveLossyQualityFromCompression(compression) {
   const safeCompression = normalizeExportCompression(compression);
   const ratio = safeCompression / 100;
-  const quality = EXPORT_MAX_QUALITY - ratio * (EXPORT_MAX_QUALITY - EXPORT_MIN_QUALITY);
+  const easedRatio = Math.pow(ratio, 1.35);
+  const quality = EXPORT_MAX_QUALITY - easedRatio * (EXPORT_MAX_QUALITY - EXPORT_MIN_QUALITY);
   return Math.min(1, Math.max(0.05, Number(quality.toFixed(4))));
 }
 
 function resolveZipCompressionLevel(compression) {
   const safeCompression = normalizeExportCompression(compression);
   return Math.max(0, Math.min(ZIP_MAX_COMPRESSION_LEVEL, Math.round((safeCompression / 100) * ZIP_MAX_COMPRESSION_LEVEL)));
+}
+
+function resolvePngColorCountFromCompression(compression) {
+  const safeCompression = normalizeExportCompression(compression);
+  if (safeCompression <= 0) {
+    return 0;
+  }
+  const ratio = safeCompression / 100;
+  const easedRatio = Math.pow(ratio, 0.9);
+  const colors = Math.round(256 - easedRatio * 248);
+  return Math.max(8, Math.min(256, colors));
 }
 
 function updateExportCompressionUi() {
@@ -839,6 +864,234 @@ function updateExportCompressionUi() {
   if (elements.exportCompressionValue instanceof HTMLElement) {
     elements.exportCompressionValue.textContent = `${safeCompression}%`;
   }
+}
+
+function setExportRecommendedCompression(compression) {
+  const safeCompression = Number.isFinite(Number(compression))
+    ? normalizeExportCompression(compression)
+    : null;
+  state.exportWizardRecommendedCompression = safeCompression;
+  if (!(elements.exportCompressionRecommendedDot instanceof HTMLElement)) {
+    return;
+  }
+  if (safeCompression === null) {
+    elements.exportCompressionRecommendedDot.classList.add('hidden');
+    elements.exportCompressionRecommendedDot.removeAttribute('style');
+    return;
+  }
+  const dotPosition = Math.min(99.5, Math.max(0.5, safeCompression));
+  elements.exportCompressionRecommendedDot.classList.remove('hidden');
+  elements.exportCompressionRecommendedDot.style.left = `${dotPosition}%`;
+  elements.exportCompressionRecommendedDot.title = `Recomanat ${safeCompression}%`;
+}
+
+function resolveExportPreviewTargetSize(item, preset) {
+  const safePreset = normalizeExportPreset(preset);
+  if (safePreset !== EXPORT_PRESET_FAVICON) {
+    return 0;
+  }
+  return Math.min(128, resolveFaviconMaxSourceSize(item));
+}
+
+function resolveRecommendationCacheKey(item, format, preset) {
+  const safeFormat = normalizeExportFormat(format);
+  const safePreset = normalizeExportPreset(preset);
+  const itemId = String(item?.id || '').trim();
+  const width = Math.max(0, Number(item?.width) || 0);
+  const height = Math.max(0, Number(item?.height) || 0);
+  const size = Math.max(0, Number(item?.fileSize) || 0) || getDataUrlByteLength(item?.dataUrl);
+  const sourceSignature = `${itemId}|${width}x${height}|${size}`;
+  return `${sourceSignature}|${safeFormat}|${safePreset}`;
+}
+
+function resolveRecommendationErrorThreshold(format) {
+  const safeFormat = normalizeExportFormat(format);
+  return EXPORT_RECOMMENDATION_ERROR_THRESHOLD[safeFormat] || EXPORT_RECOMMENDATION_ERROR_THRESHOLD['image/webp'];
+}
+
+function pickRecommendedCompression(results, format) {
+  const valid = Array.isArray(results)
+    ? results.filter((entry) => Number.isFinite(entry?.compression) && Number.isFinite(entry?.size) && Number.isFinite(entry?.error))
+    : [];
+  if (valid.length === 0) {
+    return EXPORT_DEFAULT_COMPRESSION;
+  }
+  valid.sort((left, right) => left.compression - right.compression);
+  const baseline = valid.find((entry) => entry.compression === 0) || valid[0];
+  const baselineSize = Math.max(1, Number(baseline.size) || 1);
+  const threshold = resolveRecommendationErrorThreshold(format);
+
+  const qualitySafe = valid.filter((entry) => entry.error <= threshold && entry.size <= baselineSize * 0.997);
+  if (qualitySafe.length > 0) {
+    return qualitySafe[qualitySafe.length - 1].compression;
+  }
+
+  let best = valid[0];
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const entry of valid) {
+    const sizeScore = entry.size / baselineSize;
+    const errorPenalty = Math.max(0, entry.error - threshold) * 0.06;
+    const softError = (entry.error / Math.max(1, threshold)) * 0.02;
+    const score = sizeScore + errorPenalty + softError;
+    if (score < bestScore) {
+      bestScore = score;
+      best = entry;
+    }
+  }
+  return best.compression;
+}
+
+async function applyRecommendedCompressionForCurrentExport(options = {}) {
+  if (!state.exportWizardItem?.dataUrl) {
+    setExportRecommendedCompression(null);
+    return;
+  }
+  const force = options.force === true;
+  const apply = options.apply !== false;
+  const item = state.exportWizardItem;
+  const preset = normalizeExportPreset(state.exportWizardPreset);
+  const format = resolveExportFormatForPreset(state.exportWizardFormat, preset);
+  const cacheKey = resolveRecommendationCacheKey(item, format, preset);
+  const token = state.exportWizardRecommendationToken + 1;
+  state.exportWizardRecommendationToken = token;
+
+  const cached = exportCompressionRecommendationCache.get(cacheKey);
+  if (Number.isFinite(Number(cached))) {
+    const recommended = normalizeExportCompression(cached);
+    if (token !== state.exportWizardRecommendationToken || !state.exportWizardItem?.dataUrl) {
+      return;
+    }
+    setExportRecommendedCompression(recommended);
+    if (apply && (!state.exportWizardCompressionTouched || force)) {
+      state.exportWizardCompression = recommended;
+      updateExportCompressionUi();
+      void refreshExportWizardPreview();
+    }
+    return;
+  }
+  setExportRecommendedCompression(null);
+
+  try {
+    const recommended = await estimateRecommendedCompressionForItem(item, {
+      format,
+      preset
+    });
+    if (token !== state.exportWizardRecommendationToken || !state.exportWizardItem?.dataUrl) {
+      return;
+    }
+    const safeRecommended = normalizeExportCompression(recommended);
+    exportCompressionRecommendationCache.set(cacheKey, safeRecommended);
+    setExportRecommendedCompression(safeRecommended);
+    if (apply && (!state.exportWizardCompressionTouched || force)) {
+      state.exportWizardCompression = safeRecommended;
+      updateExportCompressionUi();
+      void refreshExportWizardPreview();
+    }
+  } catch (error) {
+    console.error('Compression recommendation failed', error);
+    if (token !== state.exportWizardRecommendationToken) {
+      return;
+    }
+    setExportRecommendedCompression(null);
+  }
+}
+
+async function estimateRecommendedCompressionForItem(item, options = {}) {
+  const dataUrl = String(item?.dataUrl || '').trim();
+  if (!dataUrl.startsWith('data:image/')) {
+    return EXPORT_DEFAULT_COMPRESSION;
+  }
+  const preset = normalizeExportPreset(options.preset || state.exportWizardPreset);
+  const format = resolveExportFormatForPreset(options.format || state.exportWizardFormat, preset);
+  const targetSize = resolveExportPreviewTargetSize(item, preset);
+
+  const image = await loadImage(dataUrl);
+  const canvas = buildExportCanvasFromImage(image, {
+    format,
+    targetSize,
+    maxEdge: EXPORT_RECOMMENDATION_MAX_EDGE
+  });
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return EXPORT_DEFAULT_COMPRESSION;
+  }
+  const width = Math.max(1, Number(canvas.width) || 1);
+  const height = Math.max(1, Number(canvas.height) || 1);
+  const referencePixels = ctx.getImageData(0, 0, width, height).data;
+
+  const results = [];
+  for (const candidate of EXPORT_RECOMMENDATION_CANDIDATES) {
+    const compression = normalizeExportCompression(candidate);
+    const quality = resolveExportQuality(format, preset, compression);
+    const blob = await encodeCanvasToExportBlob(canvas, {
+      format,
+      quality,
+      pngCompression: compression
+    });
+    const error =
+      compression <= 0 && format === 'image/png'
+        ? 0
+        : await computeBlobVisualMse(blob, referencePixels, width, height);
+    results.push({
+      compression,
+      size: Math.max(1, Number(blob?.size) || 1),
+      error
+    });
+  }
+  return pickRecommendedCompression(results, format);
+}
+
+async function computeBlobVisualMse(blob, referencePixels, width, height) {
+  if (!(blob instanceof Blob) || !(referencePixels instanceof Uint8ClampedArray)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const safeWidth = Math.max(1, Number(width) || 1);
+  const safeHeight = Math.max(1, Number(height) || 1);
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const image = await loadImage(objectUrl);
+    const canvas = document.createElement('canvas');
+    canvas.width = safeWidth;
+    canvas.height = safeHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return Number.POSITIVE_INFINITY;
+    }
+    ctx.clearRect(0, 0, safeWidth, safeHeight);
+    ctx.drawImage(image, 0, 0, safeWidth, safeHeight);
+    const comparedPixels = ctx.getImageData(0, 0, safeWidth, safeHeight).data;
+    const totalChannels = safeWidth * safeHeight * 3.25;
+    let sum = 0;
+    for (let index = 0; index < comparedPixels.length; index += 4) {
+      const dr = comparedPixels[index] - referencePixels[index];
+      const dg = comparedPixels[index + 1] - referencePixels[index + 1];
+      const db = comparedPixels[index + 2] - referencePixels[index + 2];
+      const da = comparedPixels[index + 3] - referencePixels[index + 3];
+      sum += (dr * dr) + (dg * dg) + (db * db) + ((da * da) * 0.25);
+    }
+    return sum / Math.max(1, totalChannels);
+  } catch (error) {
+    console.error('Blob visual MSE failed', error);
+    return Number.POSITIVE_INFINITY;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function syncExportFormatControlState() {
+  if (!(elements.exportFormatSelect instanceof HTMLSelectElement)) {
+    return;
+  }
+  const isFaviconPreset = normalizeExportPreset(state.exportWizardPreset) === EXPORT_PRESET_FAVICON;
+  if (isFaviconPreset) {
+    state.exportWizardFormat = 'image/png';
+    elements.exportFormatSelect.value = state.exportWizardFormat;
+    elements.exportFormatSelect.disabled = true;
+    elements.exportFormatSelect.title = 'En preset favicon el format sempre es PNG';
+    return;
+  }
+  elements.exportFormatSelect.disabled = false;
+  elements.exportFormatSelect.removeAttribute('title');
 }
 
 function resolveExportFormatForPreset(format, preset) {
@@ -897,6 +1150,8 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardFormat = EXPORT_DEFAULT_FORMAT;
   state.exportWizardPreset = EXPORT_PRESET_ORIGINAL;
   state.exportWizardCompression = EXPORT_DEFAULT_COMPRESSION;
+  state.exportWizardCompressionTouched = false;
+  state.exportWizardRecommendationToken += 1;
   state.exportWizardBusy = false;
 
   if (elements.exportFormatSelect instanceof HTMLSelectElement) {
@@ -905,6 +1160,8 @@ function openExportWizardFromImageId(imageId, options = {}) {
   if (elements.exportPresetSelect instanceof HTMLSelectElement) {
     elements.exportPresetSelect.value = state.exportWizardPreset;
   }
+  syncExportFormatControlState();
+  setExportRecommendedCompression(null);
   updateExportCompressionUi();
   if (elements.exportWizardSourceName instanceof HTMLElement) {
     elements.exportWizardSourceName.textContent = itemName;
@@ -942,6 +1199,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
     });
   }
   void refreshExportWizardPreview();
+  void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
 }
 
 function findExportSourceItem(imageId, options = {}) {
@@ -994,7 +1252,10 @@ function closeExportWizardModal() {
   state.exportWizardPreviewUrl = '';
   state.exportWizardItem = null;
   state.exportWizardPreviewToken += 1;
+  state.exportWizardRecommendationToken += 1;
+  state.exportWizardCompressionTouched = false;
   state.exportWizardBusy = false;
+  setExportRecommendedCompression(null);
   if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
     elements.exportWizardPreviewImg.removeAttribute('src');
   }
@@ -1023,7 +1284,8 @@ async function refreshExportWizardPreview() {
     const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
       format,
       targetSize: previewSize,
-      quality
+      quality,
+      pngCompression: state.exportWizardCompression
     });
     if (token !== state.exportWizardPreviewToken) {
       return;
@@ -1044,14 +1306,19 @@ async function refreshExportWizardPreview() {
         preset === EXPORT_PRESET_FAVICON
           ? 'Preset favicon (exporta ZIP amb totes les mides)'
           : 'Mida original';
+      const pngColorCount = resolvePngColorCountFromCompression(state.exportWizardCompression);
       const compressionLabel =
         preset === EXPORT_PRESET_FAVICON
-          ? `ZIP DEFLATE ${resolveZipCompressionLevel(state.exportWizardCompression)}/${ZIP_MAX_COMPRESSION_LEVEL}`
+          ? normalizeExportCompression(state.exportWizardCompression) <= 0
+            ? `PNG sense pèrdua · ZIP DEFLATE ${resolveZipCompressionLevel(state.exportWizardCompression)}/${ZIP_MAX_COMPRESSION_LEVEL}`
+            : `PNG ${normalizeExportCompression(state.exportWizardCompression)}% (${pngColorCount} colors) · ZIP DEFLATE ${resolveZipCompressionLevel(state.exportWizardCompression)}/${ZIP_MAX_COMPRESSION_LEVEL}`
           : format === 'image/png'
-            ? 'PNG sense pèrdua'
-            : `Compressio ${normalizeExportCompression(state.exportWizardCompression)}%`;
+            ? normalizeExportCompression(state.exportWizardCompression) <= 0
+              ? 'PNG sense pèrdua'
+              : `PNG quantitzat ${normalizeExportCompression(state.exportWizardCompression)}% (${pngColorCount} colors)`
+            : `Compressio ${normalizeExportCompression(state.exportWizardCompression)}% · Qualitat ${Math.round((quality || 0) * 100)}%`;
       elements.exportWizardPreviewMeta.textContent =
-        `Preview ${asset.width}x${asset.height}px · ${formatLabel} · ${formatBytes(asset.blob.size)} · ${presetLabel} · ${compressionLabel}`;
+        `Preview ${asset.width}x${asset.height}px · ${formatLabel} · ${formatBytesPrecise(asset.blob.size)} · ${presetLabel} · ${compressionLabel}`;
     }
   } catch (error) {
     if (token !== state.exportWizardPreviewToken) {
@@ -1100,7 +1367,8 @@ async function exportWizardDownload() {
         const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
           format,
           targetSize: Number(size) || 0,
-          quality
+          quality,
+          pngCompression: state.exportWizardCompression
         });
         const bytes = new Uint8Array(await asset.blob.arrayBuffer());
         entries.push({
@@ -1119,7 +1387,8 @@ async function exportWizardDownload() {
     const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
       format,
       targetSize: 0,
-      quality
+      quality,
+      pngCompression: state.exportWizardCompression
     });
     await downloadBlobAsset(asset.blob, `${baseName}.${extension}`);
     showFeedbackToast('Imatge exportada');
@@ -1159,10 +1428,51 @@ async function renderImageExportAsset(dataUrl, options = {}) {
   const format = normalizeExportFormat(options.format || EXPORT_DEFAULT_FORMAT);
   const targetSize = Math.max(0, Math.round(Number(options.targetSize) || 0));
   const image = await loadImage(source);
-  const sourceWidth = Math.max(1, Number(image.naturalWidth) || 1);
-  const sourceHeight = Math.max(1, Number(image.naturalHeight) || 1);
-  const width = targetSize > 0 ? targetSize : sourceWidth;
-  const height = targetSize > 0 ? targetSize : sourceHeight;
+  const canvas = buildExportCanvasFromImage(image, {
+    format,
+    targetSize
+  });
+  const blob = await encodeCanvasToExportBlob(canvas, {
+    format,
+    quality: options.quality,
+    pngCompression: options.pngCompression
+  });
+  return { blob, width: canvas.width, height: canvas.height };
+}
+
+function canvasToBlobAsync(canvas, format, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+          return;
+        }
+        reject(new Error('canvas_blob_failed'));
+      },
+      format,
+      quality
+    );
+  });
+}
+
+function buildExportCanvasFromImage(image, options = {}) {
+  const format = normalizeExportFormat(options.format || EXPORT_DEFAULT_FORMAT);
+  const targetSize = Math.max(0, Math.round(Number(options.targetSize) || 0));
+  const maxEdge = Math.max(0, Math.round(Number(options.maxEdge) || 0));
+  const sourceWidth = Math.max(1, Number(image?.naturalWidth) || 1);
+  const sourceHeight = Math.max(1, Number(image?.naturalHeight) || 1);
+  let width = targetSize > 0 ? targetSize : sourceWidth;
+  let height = targetSize > 0 ? targetSize : sourceHeight;
+
+  if (maxEdge > 0) {
+    const dominantEdge = Math.max(width, height);
+    if (dominantEdge > maxEdge) {
+      const scale = maxEdge / dominantEdge;
+      width = Math.max(1, Math.round(width * scale));
+      height = Math.max(1, Math.round(height * scale));
+    }
+  }
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -1191,7 +1501,11 @@ async function renderImageExportAsset(dataUrl, options = {}) {
   } else {
     ctx.drawImage(image, 0, 0, width, height);
   }
+  return canvas;
+}
 
+async function encodeCanvasToExportBlob(canvas, options = {}) {
+  const format = normalizeExportFormat(options.format || EXPORT_DEFAULT_FORMAT);
   const needsQuality = format === 'image/jpeg' || format === 'image/webp';
   const requestedQuality = Number(options.quality);
   const quality = needsQuality
@@ -1199,24 +1513,33 @@ async function renderImageExportAsset(dataUrl, options = {}) {
       ? Math.min(1, Math.max(0, requestedQuality))
       : resolveLossyQualityFromCompression(EXPORT_DEFAULT_COMPRESSION)
     : undefined;
-  const blob = await canvasToBlobAsync(canvas, format, quality);
-  return { blob, width, height };
+  const pngCompression = normalizeExportCompression(options.pngCompression);
+  if (format === 'image/png' && pngCompression > 0) {
+    return encodeQuantizedPngFromCanvas(canvas, pngCompression);
+  }
+  return canvasToBlobAsync(canvas, format, quality);
 }
 
-function canvasToBlobAsync(canvas, format, quality) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (blob) {
-          resolve(blob);
-          return;
-        }
-        reject(new Error('canvas_blob_failed'));
-      },
-      format,
-      quality
-    );
-  });
+async function encodeQuantizedPngFromCanvas(canvas, compression) {
+  const width = Math.max(1, Number(canvas.width) || 1);
+  const height = Math.max(1, Number(canvas.height) || 1);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('canvas_context_unavailable');
+  }
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const rgba = new Uint8Array(imageData.data);
+  const colorCount = resolvePngColorCountFromCompression(compression);
+  if (colorCount <= 0) {
+    return canvasToBlobAsync(canvas, 'image/png');
+  }
+  try {
+    const encoded = UPNG.encode([rgba.buffer], width, height, colorCount);
+    return new Blob([encoded], { type: 'image/png' });
+  } catch (error) {
+    console.error('UPNG quantization failed, fallback to canvas PNG', error);
+    return canvasToBlobAsync(canvas, 'image/png');
+  }
 }
 
 function exportExtensionFromFormat(format) {
@@ -1941,6 +2264,17 @@ function formatBytes(bytes) {
     return `${(safe / 1024).toFixed(1)} KB`;
   }
   return `${(safe / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatBytesPrecise(bytes) {
+  const safe = Math.max(0, Math.round(Number(bytes) || 0));
+  if (safe < 1024) {
+    return `${safe} B`;
+  }
+  if (safe < 1024 * 1024) {
+    return `${(safe / 1024).toFixed(2)} KB (${safe} B)`;
+  }
+  return `${(safe / (1024 * 1024)).toFixed(3)} MB (${safe} B)`;
 }
 
 function getGalleryDisplayName(gallery) {
