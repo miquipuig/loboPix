@@ -2628,8 +2628,7 @@ select:disabled {
   transition: opacity 0.14s ease;
 }
 
-.export-transparent-control:hover .export-floating-control,
-.export-transparent-control:focus-within .export-floating-control,
+.export-transparent-control.open .export-floating-control,
 .export-transparent-control.adjusting .export-floating-control {
   opacity: 1;
   pointer-events: auto;

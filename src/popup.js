@@ -18,6 +18,8 @@ const EXPORT_BACKGROUND_TOLERANCE_DEFAULT = 0;
 const EXPORT_BACKGROUND_TOLERANCE_MAX = 120;
 const EXPORT_BACKGROUND_PROTECTION_DEFAULT = 0;
 const EXPORT_BACKGROUND_PROTECTION_MAX = 100;
+const EXPORT_BACKGROUND_TOLERANCE_ACTIVE_DEFAULT = 3;
+const EXPORT_BACKGROUND_PROTECTION_ACTIVE_DEFAULT = 11;
 const ZIP_MAX_COMPRESSION_LEVEL = 9;
 const FAVICON_PRESET_SIZES = [16, 32, 48, 64, 128, 180, 192, 256, 512];
 const EXPORT_RECOMMENDATION_CANDIDATES = [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 100];
@@ -126,6 +128,7 @@ const state = {
   exportWizardTransparentBackground: false,
   exportWizardBackgroundTolerance: EXPORT_BACKGROUND_TOLERANCE_DEFAULT,
   exportWizardBackgroundProtection: EXPORT_BACKGROUND_PROTECTION_DEFAULT,
+  exportWizardTransparentPopoverOpen: false,
   exportWizardTransparentAdjusting: false,
   exportWizardTransparentAdjustingControl: '',
   exportWizardTransparentPointerId: null,
@@ -327,17 +330,21 @@ function bindEvents() {
     });
   }
   if (elements.exportTransparentBgBtn instanceof HTMLButtonElement) {
-    elements.exportTransparentBgBtn.addEventListener('mouseenter', () => {
-      logExportTransparentDebug('button mouseenter');
-    });
-    elements.exportTransparentBgBtn.addEventListener('mouseleave', () => {
-      logExportTransparentDebug('button mouseleave');
-    });
-    elements.exportTransparentBgBtn.addEventListener('focus', () => {
-      logExportTransparentDebug('button focus');
-    });
-    elements.exportTransparentBgBtn.addEventListener('blur', () => {
-      logExportTransparentDebug('button blur');
+    elements.exportTransparentBgBtn.addEventListener('click', () => {
+      const shouldOpen = state.exportWizardTransparentPopoverOpen !== true;
+      state.exportWizardTransparentPopoverOpen = shouldOpen;
+      if (shouldOpen) {
+        setExportTransparentTolerance(EXPORT_BACKGROUND_TOLERANCE_ACTIVE_DEFAULT);
+        setExportTransparentProtection(EXPORT_BACKGROUND_PROTECTION_ACTIVE_DEFAULT);
+      } else {
+        setExportTransparentTolerance(0);
+        setExportTransparentProtection(EXPORT_BACKGROUND_PROTECTION_ACTIVE_DEFAULT);
+      }
+      logExportTransparentDebug('button click', { open: shouldOpen });
+      syncExportFormatControlState();
+      updateExportTransparentBackgroundUi();
+      void refreshExportWizardPreview();
+      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
     });
   }
 
@@ -1600,9 +1607,13 @@ function updateExportTransparentBackgroundUi() {
   const transparentControl = elements.exportTransparentBgBtn?.parentElement;
   if (transparentControl instanceof HTMLElement) {
     transparentControl.classList.toggle('adjusting', state.exportWizardTransparentAdjusting === true);
+    transparentControl.classList.toggle('open', state.exportWizardTransparentPopoverOpen === true);
   }
   if (elements.exportTransparentBgPopover instanceof HTMLElement) {
-    elements.exportTransparentBgPopover.setAttribute('aria-hidden', 'false');
+    elements.exportTransparentBgPopover.setAttribute(
+      'aria-hidden',
+      state.exportWizardTransparentPopoverOpen === true ? 'false' : 'true'
+    );
   }
   if (elements.exportTransparentBgSlider instanceof HTMLElement) {
     const ratio = EXPORT_BACKGROUND_TOLERANCE_MAX > 0 ? tolerance / EXPORT_BACKGROUND_TOLERANCE_MAX : 0;
@@ -2184,6 +2195,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardTransparentBackground = false;
   state.exportWizardBackgroundTolerance = EXPORT_BACKGROUND_TOLERANCE_DEFAULT;
   state.exportWizardBackgroundProtection = EXPORT_BACKGROUND_PROTECTION_DEFAULT;
+  state.exportWizardTransparentPopoverOpen = false;
   state.exportWizardTransparentAdjusting = false;
   state.exportWizardTransparentAdjustingControl = '';
   state.exportWizardTransparentPointerId = null;
@@ -2300,6 +2312,7 @@ function closeExportWizardModal() {
   state.exportWizardTransparentBackground = false;
   state.exportWizardBackgroundTolerance = EXPORT_BACKGROUND_TOLERANCE_DEFAULT;
   state.exportWizardBackgroundProtection = EXPORT_BACKGROUND_PROTECTION_DEFAULT;
+  state.exportWizardTransparentPopoverOpen = false;
   state.exportWizardTransparentAdjusting = false;
   state.exportWizardTransparentAdjustingControl = '';
   state.exportWizardTransparentPointerId = null;
@@ -2786,11 +2799,57 @@ function removeBackgroundFromCanvas(canvas, options = {}) {
     }
   }
 
+  const transparentCandidates = new Uint8Array(width * height);
   for (let pixelIndex = 0; pixelIndex < visited.length; pixelIndex += 1) {
     if (visited[pixelIndex] !== 1) {
       continue;
     }
     if (distances[pixelIndex] >= 0 && distances[pixelIndex] < protectionRadius) {
+      continue;
+    }
+    transparentCandidates[pixelIndex] = 1;
+  }
+
+  const exteriorTransparent = new Uint8Array(width * height);
+  const exteriorQueue = new Uint32Array(width * height);
+  let exteriorHead = 0;
+  let exteriorTail = 0;
+
+  const enqueueExterior = (x, y) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) {
+      return;
+    }
+    const pixelIndex = (y * width) + x;
+    if (transparentCandidates[pixelIndex] !== 1 || exteriorTransparent[pixelIndex] === 1) {
+      return;
+    }
+    exteriorTransparent[pixelIndex] = 1;
+    exteriorQueue[exteriorTail] = pixelIndex;
+    exteriorTail += 1;
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    enqueueExterior(x, 0);
+    enqueueExterior(x, height - 1);
+  }
+  for (let y = 0; y < height; y += 1) {
+    enqueueExterior(0, y);
+    enqueueExterior(width - 1, y);
+  }
+
+  while (exteriorHead < exteriorTail) {
+    const pixelIndex = exteriorQueue[exteriorHead];
+    exteriorHead += 1;
+    const x = pixelIndex % width;
+    const y = Math.floor(pixelIndex / width);
+    enqueueExterior(x - 1, y);
+    enqueueExterior(x + 1, y);
+    enqueueExterior(x, y - 1);
+    enqueueExterior(x, y + 1);
+  }
+
+  for (let pixelIndex = 0; pixelIndex < exteriorTransparent.length; pixelIndex += 1) {
+    if (exteriorTransparent[pixelIndex] !== 1) {
       continue;
     }
     data[(pixelIndex * 4) + 3] = 0;
