@@ -10,6 +10,7 @@ const MANUAL_GALLERY_ID = 'manual-gallery';
 const EXPORT_PRESET_ORIGINAL = 'original';
 const EXPORT_PRESET_FAVICON = 'favicon';
 const EXPORT_DEFAULT_FORMAT = 'image/webp';
+const EXPORT_FORMAT_CANDIDATES = ['image/webp', 'image/png', 'image/jpeg'];
 const EXPORT_DEFAULT_COMPRESSION = 72;
 const EXPORT_MIN_QUALITY = 0.05;
 const EXPORT_MAX_QUALITY = 1;
@@ -30,6 +31,7 @@ const EXPORT_RECOMMENDATION_ERROR_THRESHOLD = {
   'image/jpeg': 24
 };
 const exportCompressionRecommendationCache = new Map();
+const exportFormatRecommendationCache = new Map();
 
 const elements = {
   popupRoot: document.getElementById('popupRoot'),
@@ -122,6 +124,9 @@ const state = {
   exportWizardPreset: EXPORT_PRESET_ORIGINAL,
   exportWizardCompression: EXPORT_DEFAULT_COMPRESSION,
   exportWizardRecommendedCompression: null,
+  exportWizardPassthroughCompression: null,
+  exportWizardFormatTouched: false,
+  exportWizardFormatRecommendationToken: 0,
   exportWizardRecommendationToken: 0,
   exportWizardCompressionTouched: false,
   exportWizardCropEnabled: false,
@@ -307,7 +312,7 @@ function bindEvents() {
       }
       updateExportCropUi();
       void refreshExportWizardPreview();
-      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+      void refreshExportFormatAndCompressionRecommendations();
     });
   }
 
@@ -345,7 +350,7 @@ function bindEvents() {
       syncExportFormatControlState();
       updateExportTransparentBackgroundUi();
       void refreshExportWizardPreview();
-      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+      void refreshExportFormatAndCompressionRecommendations();
     });
   }
 
@@ -387,7 +392,7 @@ function bindEvents() {
     state.exportWizardTransparentPointerId = null;
     updateExportTransparentBackgroundUi();
     logExportTransparentDebug('window pointerup');
-    void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+    void refreshExportFormatAndCompressionRecommendations();
   });
   window.addEventListener('pointercancel', () => {
     if (state.exportWizardTransparentAdjusting !== true) {
@@ -398,7 +403,7 @@ function bindEvents() {
     state.exportWizardTransparentPointerId = null;
     updateExportTransparentBackgroundUi();
     logExportTransparentDebug('window pointercancel');
-    void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+    void refreshExportFormatAndCompressionRecommendations();
   });
   window.addEventListener('resize', () => {
     if (state.exportWizardItem) {
@@ -442,7 +447,7 @@ function bindEvents() {
       syncExportFormatControlState();
       updateExportTransparentBackgroundUi();
       void refreshExportWizardPreview();
-      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+      void refreshExportFormatAndCompressionRecommendations();
       event.preventDefault();
     });
   }
@@ -483,7 +488,7 @@ function bindEvents() {
       syncExportFormatControlState();
       updateExportTransparentBackgroundUi();
       void refreshExportWizardPreview();
-      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+      void refreshExportFormatAndCompressionRecommendations();
       event.preventDefault();
     });
   }
@@ -491,6 +496,7 @@ function bindEvents() {
   if (elements.exportFormatSelect instanceof HTMLSelectElement) {
     elements.exportFormatSelect.addEventListener('change', () => {
       state.exportWizardFormat = normalizeExportFormat(elements.exportFormatSelect.value);
+      state.exportWizardFormatTouched = true;
       state.exportWizardCompressionTouched = false;
       updateExportWizardActionUi();
       void refreshExportWizardPreview();
@@ -508,7 +514,7 @@ function bindEvents() {
       updateExportCropUi();
       state.exportWizardCompressionTouched = false;
       void refreshExportWizardPreview();
-      void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+      void refreshExportFormatAndCompressionRecommendations();
     });
   }
 
@@ -1071,6 +1077,55 @@ function normalizeExportCompression(value) {
   return Math.max(0, Math.min(100, raw));
 }
 
+function extractComparableExportFormatFromDataUrl(dataUrl) {
+  const safe = String(dataUrl || '').trim();
+  const match = safe.match(/^data:(image\/[a-z0-9.+-]+)(?:;|,)/iu);
+  if (!match) {
+    return '';
+  }
+  const mime = String(match[1] || '').trim().toLowerCase();
+  if (mime === 'image/png') {
+    return 'image/png';
+  }
+  if (mime === 'image/jpeg' || mime === 'image/jpg') {
+    return 'image/jpeg';
+  }
+  if (mime === 'image/webp') {
+    return 'image/webp';
+  }
+  return '';
+}
+
+function extractMimeTypeFromDataUrl(dataUrl) {
+  const safe = String(dataUrl || '').trim();
+  const match = safe.match(/^data:([^;,]+)(?:;|,)/iu);
+  return match ? String(match[1] || '').trim().toLowerCase() : '';
+}
+
+function isOriginalFormatPassthroughExport(
+  item,
+  format,
+  preset,
+  editOptions = {},
+  compression = null,
+  passthroughCompression = null
+) {
+  const safePreset = normalizeExportPreset(preset);
+  const safeFormat = normalizeExportFormat(format);
+  const originalFormat = extractComparableExportFormatFromDataUrl(item?.dataUrl);
+  const safeCompression = compression === null ? 0 : normalizeExportCompression(compression);
+  const safePassthroughCompression = Number.isFinite(Number(passthroughCompression))
+    ? normalizeExportCompression(passthroughCompression)
+    : null;
+  return (
+    safePreset === EXPORT_PRESET_ORIGINAL &&
+    editOptions?.cropEnabled !== true &&
+    editOptions?.transparentBackground !== true &&
+    originalFormat === safeFormat &&
+    (safeCompression <= 0 || (safePassthroughCompression !== null && safeCompression === safePassthroughCompression))
+  );
+}
+
 function resolveLossyQualityFromCompression(compression) {
   const safeCompression = normalizeExportCompression(compression);
   const ratio = safeCompression / 100;
@@ -1586,7 +1641,7 @@ function handleExportCropPointerUp(event) {
   state.exportWizardCropInteraction = null;
   updateExportCropUi();
   void refreshExportWizardPreview();
-  void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+  void refreshExportFormatAndCompressionRecommendations();
 }
 
 function updateExportTransparentBackgroundUi() {
@@ -1701,12 +1756,26 @@ function setExportRecommendedCompression(compression) {
   elements.exportCompressionRecommendedDot.title = `Recomanat ${safeCompression}%`;
 }
 
+function setExportPassthroughCompression(compression) {
+  state.exportWizardPassthroughCompression = Number.isFinite(Number(compression))
+    ? normalizeExportCompression(compression)
+    : null;
+}
+
 function resolveExportPreviewTargetSize(item, preset, editOptions = {}) {
   const safePreset = normalizeExportPreset(preset);
   if (safePreset !== EXPORT_PRESET_FAVICON) {
     return 0;
   }
   return Math.min(128, resolveFaviconMaxSourceSize(item, editOptions));
+}
+
+function resolveExportValidationTargetSize(item, preset, editOptions = {}) {
+  const safePreset = normalizeExportPreset(preset);
+  if (safePreset !== EXPORT_PRESET_FAVICON) {
+    return 0;
+  }
+  return resolveFaviconMaxSourceSize(item, editOptions);
 }
 
 function resolveRecommendationCacheKey(item, format, preset, editOptions = {}) {
@@ -1726,6 +1795,34 @@ function resolveRecommendationCacheKey(item, format, preset, editOptions = {}) {
       : 'opaque'
   ].join('|');
   return `${sourceSignature}|${safeFormat}|${safePreset}|${editSignature}`;
+}
+
+function resolveFormatRecommendationCacheKey(item, preset, editOptions = {}) {
+  const safePreset = normalizeExportPreset(preset);
+  const itemId = String(item?.id || '').trim();
+  const width = Math.max(0, Number(item?.width) || 0);
+  const height = Math.max(0, Number(item?.height) || 0);
+  const size = Math.max(0, Number(item?.fileSize) || 0) || getDataUrlByteLength(item?.dataUrl);
+  const rect = clampExportCropRect(editOptions.cropRect);
+  const editSignature = [
+    editOptions.cropEnabled === true ? 'crop' : 'full',
+    `${Math.round(rect.x * 100)}-${Math.round(rect.y * 100)}-${Math.round(rect.width * 100)}-${Math.round(rect.height * 100)}`,
+    editOptions.transparentBackground === true
+      ? `alpha-${normalizeExportBackgroundTolerance(editOptions.backgroundTolerance)}-${normalizeExportBackgroundProtection(editOptions.backgroundProtection)}`
+      : 'opaque'
+  ].join('|');
+  return `${itemId}|${width}x${height}|${size}|${safePreset}|${editSignature}`;
+}
+
+function resolveExportFormatCandidates(preset, editOptions = {}) {
+  const safePreset = normalizeExportPreset(preset);
+  if (safePreset === EXPORT_PRESET_FAVICON) {
+    return ['image/png'];
+  }
+  const formats = EXPORT_FORMAT_CANDIDATES
+    .map((candidate) => resolveEffectiveExportFormat(candidate, safePreset, editOptions))
+    .filter(Boolean);
+  return Array.from(new Set(formats));
 }
 
 function resolveRecommendationErrorThreshold(format) {
@@ -1917,6 +2014,7 @@ function pickRecommendedCompression(results, format, strategy = null) {
 async function applyRecommendedCompressionForCurrentExport(options = {}) {
   if (!state.exportWizardItem?.dataUrl) {
     setExportRecommendedCompression(null);
+    setExportPassthroughCompression(null);
     return;
   }
   const force = options.force === true;
@@ -1930,23 +2028,38 @@ async function applyRecommendedCompressionForCurrentExport(options = {}) {
   state.exportWizardRecommendationToken = token;
 
   const cached = exportCompressionRecommendationCache.get(cacheKey);
-  if (Number.isFinite(Number(cached))) {
-    const recommended = normalizeExportCompression(cached);
+  const cachedResult =
+    cached && typeof cached === 'object'
+      ? {
+          compression: normalizeExportCompression(cached.compression),
+          passthroughCompression: Number.isFinite(Number(cached.passthroughCompression))
+            ? normalizeExportCompression(cached.passthroughCompression)
+            : null
+        }
+      : Number.isFinite(Number(cached))
+        ? {
+            compression: normalizeExportCompression(cached),
+            passthroughCompression: null
+          }
+        : null;
+  if (cachedResult) {
     if (token !== state.exportWizardRecommendationToken || !state.exportWizardItem?.dataUrl) {
       return;
     }
-    setExportRecommendedCompression(recommended);
+    setExportRecommendedCompression(cachedResult.compression);
+    setExportPassthroughCompression(cachedResult.passthroughCompression);
     if (apply && (!state.exportWizardCompressionTouched || force)) {
-      state.exportWizardCompression = recommended;
+      state.exportWizardCompression = cachedResult.compression;
       updateExportCompressionUi();
       void refreshExportWizardPreview();
     }
     return;
   }
   setExportRecommendedCompression(null);
+  setExportPassthroughCompression(null);
 
   try {
-    const recommended = await estimateRecommendedCompressionForItem(item, {
+    const recommended = await estimateRecommendedCompressionResultForItem(item, {
       format,
       preset,
       ...editOptions
@@ -1954,11 +2067,17 @@ async function applyRecommendedCompressionForCurrentExport(options = {}) {
     if (token !== state.exportWizardRecommendationToken || !state.exportWizardItem?.dataUrl) {
       return;
     }
-    const safeRecommended = normalizeExportCompression(recommended);
+    const safeRecommended = {
+      compression: normalizeExportCompression(recommended.compression),
+      passthroughCompression: Number.isFinite(Number(recommended.passthroughCompression))
+        ? normalizeExportCompression(recommended.passthroughCompression)
+        : null
+    };
     exportCompressionRecommendationCache.set(cacheKey, safeRecommended);
-    setExportRecommendedCompression(safeRecommended);
+    setExportRecommendedCompression(safeRecommended.compression);
+    setExportPassthroughCompression(safeRecommended.passthroughCompression);
     if (apply && (!state.exportWizardCompressionTouched || force)) {
-      state.exportWizardCompression = safeRecommended;
+      state.exportWizardCompression = safeRecommended.compression;
       updateExportCompressionUi();
       void refreshExportWizardPreview();
     }
@@ -1968,13 +2087,110 @@ async function applyRecommendedCompressionForCurrentExport(options = {}) {
       return;
     }
     setExportRecommendedCompression(null);
+    setExportPassthroughCompression(null);
   }
 }
 
-async function estimateRecommendedCompressionForItem(item, options = {}) {
+async function autoSelectBestFormatForCurrentExport(options = {}) {
+  if (!state.exportWizardItem?.dataUrl) {
+    return state.exportWizardFormat;
+  }
+
+  const force = options.force === true;
+  if (state.exportWizardFormatTouched && !force) {
+    return state.exportWizardFormat;
+  }
+
+  const item = state.exportWizardItem;
+  const preset = normalizeExportPreset(state.exportWizardPreset);
+  const editOptions = getCurrentExportEditOptions();
+  const candidates = resolveExportFormatCandidates(preset, editOptions);
+  if (candidates.length <= 1) {
+    const onlyFormat = normalizeExportFormat(candidates[0] || resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions));
+    if (state.exportWizardFormat !== onlyFormat) {
+      state.exportWizardFormat = onlyFormat;
+      syncExportFormatControlState();
+    }
+    return state.exportWizardFormat;
+  }
+
+  const cacheKey = resolveFormatRecommendationCacheKey(item, preset, editOptions);
+  const cached = exportFormatRecommendationCache.get(cacheKey);
+  const applyRecommendedFormat = (format) => {
+    const safeFormat = normalizeExportFormat(format);
+    if (state.exportWizardFormat !== safeFormat) {
+      state.exportWizardFormat = safeFormat;
+      syncExportFormatControlState();
+    }
+    return state.exportWizardFormat;
+  };
+
+  if (typeof cached === 'string' && cached) {
+    return applyRecommendedFormat(cached);
+  }
+
+  const token = state.exportWizardFormatRecommendationToken + 1;
+  state.exportWizardFormatRecommendationToken = token;
+
+  try {
+    const results = await Promise.all(
+      candidates.map(async (format) => {
+        const recommendation = await estimateRecommendedCompressionResultForItem(item, {
+          format,
+          preset,
+          ...editOptions
+        });
+        return {
+          format,
+          size: Math.max(1, Number(recommendation?.size) || 1)
+        };
+      })
+    );
+    if (token !== state.exportWizardFormatRecommendationToken || !state.exportWizardItem?.dataUrl) {
+      return state.exportWizardFormat;
+    }
+
+    const best = results.reduce((winner, entry) => {
+      if (!winner) {
+        return entry;
+      }
+      return entry.size < winner.size ? entry : winner;
+    }, null);
+    const bestFormat = normalizeExportFormat(best?.format || candidates[0]);
+    exportFormatRecommendationCache.set(cacheKey, bestFormat);
+    return applyRecommendedFormat(bestFormat);
+  } catch (error) {
+    console.error('Format recommendation failed', error);
+    if (token !== state.exportWizardFormatRecommendationToken) {
+      return state.exportWizardFormat;
+    }
+    return state.exportWizardFormat;
+  }
+}
+
+async function refreshExportFormatAndCompressionRecommendations(options = {}) {
+  if (!state.exportWizardItem?.dataUrl) {
+    setExportRecommendedCompression(null);
+    return;
+  }
+
+  const forceFormat = options.forceFormat === true;
+  const previousFormat = state.exportWizardFormat;
+  await autoSelectBestFormatForCurrentExport({ force: forceFormat });
+  if (previousFormat !== state.exportWizardFormat) {
+    state.exportWizardCompressionTouched = false;
+    await refreshExportWizardPreview();
+  }
+  await applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+}
+
+async function estimateRecommendedCompressionResultForItem(item, options = {}) {
   const dataUrl = String(item?.dataUrl || '').trim();
   if (!dataUrl.startsWith('data:image/')) {
-    return EXPORT_DEFAULT_COMPRESSION;
+    return {
+      compression: EXPORT_DEFAULT_COMPRESSION,
+      size: Math.max(1, Number(item?.fileSize) || getDataUrlByteLength(item?.dataUrl) || 1)
+    };
   }
   const preset = normalizeExportPreset(options.preset || state.exportWizardPreset);
   const editOptions = {
@@ -1985,6 +2201,8 @@ async function estimateRecommendedCompressionForItem(item, options = {}) {
     backgroundProtection: options.backgroundProtection
   };
   const format = resolveEffectiveExportFormat(options.format || state.exportWizardFormat, preset, editOptions);
+  const originalSize = Math.max(0, Number(item?.fileSize) || getDataUrlByteLength(item?.dataUrl));
+  const canPassthroughOriginal = isOriginalFormatPassthroughExport(item, format, preset, editOptions, 0);
   const targetSize = resolveExportPreviewTargetSize(item, preset, editOptions);
 
   const image = await loadImage(dataUrl);
@@ -1996,7 +2214,7 @@ async function estimateRecommendedCompressionForItem(item, options = {}) {
   });
   const ctx = canvas.getContext('2d');
   if (!ctx) {
-    return EXPORT_DEFAULT_COMPRESSION;
+    return { compression: EXPORT_DEFAULT_COMPRESSION, size: Math.max(1, Number(item?.fileSize) || 1) };
   }
   const pngAnalysis = format === 'image/png' ? analyzePngRecommendationCanvas(canvas) : null;
   const pngStrategy = format === 'image/png' ? resolvePngRecommendationStrategy(pngAnalysis) : null;
@@ -2031,7 +2249,62 @@ async function estimateRecommendedCompressionForItem(item, options = {}) {
       error
     });
   }
-  return pickRecommendedCompression(results, format, pngStrategy);
+
+  const recommendedCompression = pickRecommendedCompression(results, format, pngStrategy);
+  const originalComparableFormat = extractComparableExportFormatFromDataUrl(item?.dataUrl);
+  const shouldCapToOriginalSize = originalComparableFormat === format && originalSize > 0;
+  const firstResult = results[0] || { compression: EXPORT_DEFAULT_COMPRESSION, size: Math.max(1, originalSize || 1) };
+  let recommendedResult =
+    results.find((entry) => entry.compression === recommendedCompression) ||
+    results.find((entry) => entry.compression === 0) ||
+    firstResult;
+  let adjustedToOriginalSize = false;
+
+  if (shouldCapToOriginalSize && recommendedResult.size > originalSize) {
+    const validationCanvas = buildExportCanvasFromImage(image, {
+      format,
+      targetSize: resolveExportValidationTargetSize(item, preset, editOptions),
+      ...editOptions
+    });
+    let smallestRealResult = null;
+    const comparableCandidates = candidateCompressions.filter((candidate) => normalizeExportCompression(candidate) > 0);
+
+    for (const candidate of comparableCandidates) {
+      const compression = normalizeExportCompression(candidate);
+      const blob = await encodeCanvasToExportBlob(validationCanvas, {
+        format,
+        quality: resolveExportQuality(format, preset, compression),
+        pngCompression: compression
+      });
+      const size = Math.max(1, Number(blob?.size) || 1);
+      const entry = { compression, size };
+      if (!smallestRealResult || size < smallestRealResult.size) {
+        smallestRealResult = entry;
+      }
+      if (size <= originalSize) {
+        recommendedResult = entry;
+        adjustedToOriginalSize = true;
+        break;
+      }
+    }
+
+    if ((!Number.isFinite(Number(recommendedResult?.size)) || recommendedResult.size > originalSize) && smallestRealResult) {
+      recommendedResult = smallestRealResult;
+      adjustedToOriginalSize = true;
+    }
+  }
+  return {
+    compression: normalizeExportCompression(recommendedResult.compression),
+    size: Math.max(1, Number(recommendedResult?.size) || 1),
+    passthroughCompression: canPassthroughOriginal && adjustedToOriginalSize
+      ? normalizeExportCompression(recommendedResult.compression)
+      : null
+  };
+}
+
+async function estimateRecommendedCompressionForItem(item, options = {}) {
+  const result = await estimateRecommendedCompressionResultForItem(item, options);
+  return result.compression;
 }
 
 async function computeBlobVisualMse(blob, referencePixels, width, height) {
@@ -2192,7 +2465,9 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardFormat = EXPORT_DEFAULT_FORMAT;
   state.exportWizardPreset = EXPORT_PRESET_ORIGINAL;
   state.exportWizardCompression = EXPORT_DEFAULT_COMPRESSION;
+  state.exportWizardFormatTouched = false;
   state.exportWizardCompressionTouched = false;
+  state.exportWizardPassthroughCompression = null;
   state.exportWizardCropEnabled = false;
   state.exportWizardCropRect = createDefaultExportCropRect(state.exportWizardItem);
   state.exportWizardCropInteraction = null;
@@ -2203,6 +2478,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardTransparentAdjustingControl = '';
   state.exportWizardTransparentPointerId = null;
   state.exportWizardEstimatedOutputBytes = 0;
+  state.exportWizardFormatRecommendationToken += 1;
   state.exportWizardRecommendationToken += 1;
   state.exportWizardBusy = false;
 
@@ -2256,7 +2532,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
     });
   }
   void refreshExportWizardPreview();
-  void applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+  void refreshExportFormatAndCompressionRecommendations({ forceFormat: true });
 }
 
 function findExportSourceItem(imageId, options = {}) {
@@ -2309,8 +2585,11 @@ function closeExportWizardModal() {
   state.exportWizardPreviewUrl = '';
   state.exportWizardItem = null;
   state.exportWizardPreviewToken += 1;
+  state.exportWizardFormatTouched = false;
+  state.exportWizardFormatRecommendationToken += 1;
   state.exportWizardRecommendationToken += 1;
   state.exportWizardCompressionTouched = false;
+  state.exportWizardPassthroughCompression = null;
   state.exportWizardCropEnabled = false;
   state.exportWizardCropRect = createFullExportCropRect();
   state.exportWizardCropInteraction = null;
@@ -2323,6 +2602,7 @@ function closeExportWizardModal() {
   state.exportWizardEstimatedOutputBytes = 0;
   state.exportWizardBusy = false;
   setExportRecommendedCompression(null);
+  setExportPassthroughCompression(null);
   updateExportCropUi();
   updateExportTransparentBackgroundUi();
   updateExportWizardActionUi();
@@ -2348,6 +2628,7 @@ async function refreshExportWizardPreview() {
   if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
     elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
   }
+  const passthroughCompression = state.exportWizardPassthroughCompression;
 
   const preset = normalizeExportPreset(state.exportWizardPreset);
   const editOptions = getCurrentExportEditOptions();
@@ -2362,9 +2643,11 @@ async function refreshExportWizardPreview() {
   try {
     const previewAsset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
       format,
+      preset,
       targetSize: imagePreviewSize,
       quality,
       pngCompression: state.exportWizardCompression,
+      passthroughCompression,
       ...previewEditOptions
     });
     if (token !== state.exportWizardPreviewToken) {
@@ -2375,9 +2658,11 @@ async function refreshExportWizardPreview() {
       preset === EXPORT_PRESET_FAVICON
         ? await renderImageExportAsset(state.exportWizardItem.dataUrl, {
             format,
+            preset,
             targetSize: exportPreviewSize,
             quality,
             pngCompression: state.exportWizardCompression,
+            passthroughCompression,
             ...editOptions
           })
         : previewAsset;
@@ -2389,9 +2674,11 @@ async function refreshExportWizardPreview() {
       preset === EXPORT_PRESET_FAVICON && faviconMaxSize > 0 && faviconMaxSize !== exportPreviewSize
         ? await renderImageExportAsset(state.exportWizardItem.dataUrl, {
             format,
+            preset,
             targetSize: faviconMaxSize,
             quality,
             pngCompression: state.exportWizardCompression,
+            passthroughCompression,
             ...editOptions
           })
         : metaAsset;
@@ -2413,8 +2700,20 @@ async function refreshExportWizardPreview() {
     if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
       const formatLabel = exportFormatLabel(format);
       const pngColorCount = resolvePngColorCountFromCompression(state.exportWizardCompression);
+      const isPassthroughPreview = isOriginalFormatPassthroughExport(
+        state.exportWizardItem,
+        format,
+        preset,
+        editOptions,
+        state.exportWizardCompression,
+        passthroughCompression
+      );
       const compressionLabel =
-        preset === EXPORT_PRESET_FAVICON
+        isPassthroughPreview
+          ? Number.isFinite(Number(passthroughCompression)) && passthroughCompression > 0
+            ? `Original sense recompressio · Equivalencia ${passthroughCompression}%`
+            : 'Original sense recompressio'
+          : preset === EXPORT_PRESET_FAVICON
           ? normalizeExportCompression(state.exportWizardCompression) <= 0
             ? 'PNG sense pèrdua'
             : `PNG ${normalizeExportCompression(state.exportWizardCompression)}% (${pngColorCount} colors)`
@@ -2472,6 +2771,7 @@ async function exportWizardDownload() {
   const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
   const quality = resolveExportQuality(format, preset, state.exportWizardCompression);
   const extension = exportExtensionFromFormat(format);
+  const passthroughCompression = state.exportWizardPassthroughCompression;
 
   try {
     if (preset === EXPORT_PRESET_FAVICON) {
@@ -2484,9 +2784,11 @@ async function exportWizardDownload() {
       for (const size of faviconSizes) {
         const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
           format,
+          preset,
           targetSize: Number(size) || 0,
           quality,
           pngCompression: state.exportWizardCompression,
+          passthroughCompression,
           ...editOptions
         });
         const bytes = new Uint8Array(await asset.blob.arrayBuffer());
@@ -2505,9 +2807,11 @@ async function exportWizardDownload() {
 
     const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
       format,
+      preset,
       targetSize: 0,
       quality,
       pngCompression: state.exportWizardCompression,
+      passthroughCompression,
       ...editOptions
     });
     await downloadBlobAsset(asset.blob, `${baseName}.${extension}`);
@@ -2544,7 +2848,33 @@ async function renderImageExportAsset(dataUrl, options = {}) {
   }
 
   const format = normalizeExportFormat(options.format || EXPORT_DEFAULT_FORMAT);
+  const preset = normalizeExportPreset(options.preset || state.exportWizardPreset);
   const targetSize = Math.max(0, Math.round(Number(options.targetSize) || 0));
+  const passthroughEditOptions = {
+    cropEnabled: options.cropEnabled === true,
+    cropRect: options.cropRect,
+    transparentBackground: options.transparentBackground === true,
+    backgroundTolerance: options.backgroundTolerance,
+    backgroundProtection: options.backgroundProtection
+  };
+  if (isOriginalFormatPassthroughExport(
+    { dataUrl: source },
+    format,
+    preset,
+    passthroughEditOptions,
+    options.pngCompression,
+    options.passthroughCompression
+  ) && targetSize <= 0) {
+    const bytes = decodeDataUrlToBytes(source);
+    if (bytes?.length) {
+      const image = await loadImage(source);
+      return {
+        blob: new Blob([bytes], { type: extractMimeTypeFromDataUrl(source) || format }),
+        width: Math.max(1, Number(image?.naturalWidth) || 1),
+        height: Math.max(1, Number(image?.naturalHeight) || 1)
+      };
+    }
+  }
   const image = await loadImage(source);
   const canvas = buildExportCanvasFromImage(image, {
     format,
