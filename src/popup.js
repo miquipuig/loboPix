@@ -3180,12 +3180,18 @@ async function applyRecommendedCompressionForCurrentExport(options = {}) {
     if (token !== state.exportWizardRecommendationToken || !state.exportWizardItem?.dataUrl) {
       return;
     }
+    const previousCompression = normalizeExportCompression(state.exportWizardCompression);
+    const previousPassthroughCompression = state.exportWizardPassthroughCompression;
     setExportRecommendedCompression(activeRecommendation?.compression);
     setExportPassthroughCompression(activeRecommendation?.passthroughCompression);
     if (apply && (!state.exportWizardCompressionTouched || force)) {
-      state.exportWizardCompression = activeRecommendation?.compression ?? EXPORT_DEFAULT_COMPRESSION;
-      updateExportCompressionUi();
-      void refreshExportWizardPreview();
+      const nextCompression = activeRecommendation?.compression ?? EXPORT_DEFAULT_COMPRESSION;
+      const passthroughChanged = previousPassthroughCompression !== state.exportWizardPassthroughCompression;
+      if (nextCompression !== previousCompression || passthroughChanged) {
+        state.exportWizardCompression = nextCompression;
+        updateExportCompressionUi();
+        void refreshExportWizardPreview({ quiet: true });
+      }
     }
     return;
   }
@@ -3209,12 +3215,18 @@ async function applyRecommendedCompressionForCurrentExport(options = {}) {
       rememberExportWizardFormatAnalysis(format, safeRecommended, item, preset, editOptions);
     }
     const activeRecommendation = resolveExportRecommendationResultForLevel(safeRecommended);
+    const previousCompression = normalizeExportCompression(state.exportWizardCompression);
+    const previousPassthroughCompression = state.exportWizardPassthroughCompression;
     setExportRecommendedCompression(activeRecommendation?.compression);
     setExportPassthroughCompression(activeRecommendation?.passthroughCompression);
     if (apply && (!state.exportWizardCompressionTouched || force)) {
-      state.exportWizardCompression = activeRecommendation?.compression ?? EXPORT_DEFAULT_COMPRESSION;
-      updateExportCompressionUi();
-      void refreshExportWizardPreview();
+      const nextCompression = activeRecommendation?.compression ?? EXPORT_DEFAULT_COMPRESSION;
+      const passthroughChanged = previousPassthroughCompression !== state.exportWizardPassthroughCompression;
+      if (nextCompression !== previousCompression || passthroughChanged) {
+        state.exportWizardCompression = nextCompression;
+        updateExportCompressionUi();
+        void refreshExportWizardPreview({ quiet: true });
+      }
     }
   } catch (error) {
     console.error('Compression recommendation failed', error);
@@ -3366,10 +3378,10 @@ async function runExportFormatAndCompressionRecommendations(options = {}) {
   const analyses = await ensureExportWizardFormatAnalyses({ force: options.forceAnalysis === true });
   updateExportOptimalSummaryUi(analyses);
   const previousFormat = state.exportWizardFormat;
-  await autoSelectBestFormatForCurrentExport({ force: forceFormat, analyses });
+    await autoSelectBestFormatForCurrentExport({ force: forceFormat, analyses });
   if (previousFormat !== state.exportWizardFormat) {
     state.exportWizardCompressionTouched = false;
-    await refreshExportWizardPreview();
+    await refreshExportWizardPreview({ quiet: true });
   }
   await applyRecommendedCompressionForCurrentExport({ force: true, apply: true, analyses });
 }
@@ -4125,7 +4137,7 @@ function closeExportWizardModal() {
   }
 }
 
-async function refreshExportWizardPreview() {
+async function refreshExportWizardPreview(options = {}) {
   if (!state.exportWizardItem?.dataUrl) {
     return;
   }
@@ -4154,12 +4166,17 @@ async function refreshExportWizardPreview() {
   const hasStableCropStagePreview =
     needsVisibleCropStagePreview &&
     String(state.exportWizardCropEditorPreviewUrl || '').trim() !== '';
+  const hasVisiblePreviewFrame =
+    String(state.exportWizardPreviewUrl || '').trim() !== '' || hasStableCropStagePreview || state.exportWizardCropTransitioning === true;
+  const shouldShowLoadingIndicator =
+    options.showLoadingIndicator === true ||
+    (options.quiet !== true && !hasVisiblePreviewFrame);
 
-  if (hasStableCropStagePreview) {
+  if (!shouldShowLoadingIndicator || hasStableCropStagePreview) {
     setExportWizardPreviewLoading(false);
   } else {
     setExportWizardPreviewLoading(true, {
-      delayMs: state.exportWizardPreviewUrl ? 220 : 120,
+      delayMs: 120,
       token
     });
   }
@@ -4176,6 +4193,8 @@ async function refreshExportWizardPreview() {
     updateExportCropUi();
   }
 
+  let preparedCropStageUrl = '';
+  let preparedPreviewUrl = '';
   try {
     const previewAsset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
       format,
@@ -4205,8 +4224,13 @@ async function refreshExportWizardPreview() {
       if (token !== state.exportWizardPreviewToken) {
         return;
       }
-      setExportWizardCropEditorPreviewUrl(URL.createObjectURL(cropStageAsset.blob));
-      updateExportCropUi();
+      preparedCropStageUrl = URL.createObjectURL(cropStageAsset.blob);
+      await preloadImageSource(preparedCropStageUrl);
+      if (token !== state.exportWizardPreviewToken) {
+        URL.revokeObjectURL(preparedCropStageUrl);
+        preparedCropStageUrl = '';
+        return;
+      }
     }
 
     const metaAsset =
@@ -4241,16 +4265,34 @@ async function refreshExportWizardPreview() {
       return;
     }
 
-    const nextUrl = URL.createObjectURL(previewAsset.blob);
-    if (state.exportWizardPreviewUrl) {
-      URL.revokeObjectURL(state.exportWizardPreviewUrl);
+    preparedPreviewUrl = URL.createObjectURL(previewAsset.blob);
+    await preloadImageSource(preparedPreviewUrl);
+    if (token !== state.exportWizardPreviewToken) {
+      URL.revokeObjectURL(preparedPreviewUrl);
+      preparedPreviewUrl = '';
+      if (preparedCropStageUrl) {
+        URL.revokeObjectURL(preparedCropStageUrl);
+        preparedCropStageUrl = '';
+      }
+      return;
     }
-    state.exportWizardPreviewUrl = nextUrl;
+
+    if (preparedCropStageUrl) {
+      setExportWizardCropEditorPreviewUrl(preparedCropStageUrl);
+      preparedCropStageUrl = '';
+      updateExportCropUi();
+    }
+    const previousPreviewUrl = state.exportWizardPreviewUrl;
+    state.exportWizardPreviewUrl = preparedPreviewUrl;
+    preparedPreviewUrl = '';
     state.exportWizardEstimatedOutputBytes = Math.max(0, Number(actionAsset.blob.size) || 0);
     updateExportWizardActionUi();
 
     if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
-      elements.exportWizardPreviewImg.src = nextUrl;
+      elements.exportWizardPreviewImg.src = state.exportWizardPreviewUrl;
+    }
+    if (previousPreviewUrl && previousPreviewUrl !== state.exportWizardPreviewUrl) {
+      URL.revokeObjectURL(previousPreviewUrl);
     }
     if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
       const formatLabel = exportFormatLabel(format);
@@ -4303,6 +4345,12 @@ async function refreshExportWizardPreview() {
       setExportWizardPreviewLoading(false);
     }
   } catch (error) {
+    if (preparedPreviewUrl) {
+      URL.revokeObjectURL(preparedPreviewUrl);
+    }
+    if (preparedCropStageUrl) {
+      URL.revokeObjectURL(preparedCropStageUrl);
+    }
     if (token !== state.exportWizardPreviewToken) {
       return;
     }
@@ -7542,6 +7590,18 @@ function loadImage(src) {
     image.onerror = () => reject(new Error('image_load_failed'));
     image.src = src;
   });
+}
+
+async function preloadImageSource(src) {
+  const image = await loadImage(src);
+  if (typeof image.decode === 'function') {
+    try {
+      await image.decode();
+    } catch {
+      // Some browsers may reject decode() for already-loaded object URLs.
+    }
+  }
+  return image;
 }
 
 function blobToDataUrl(blob) {
