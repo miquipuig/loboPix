@@ -7,7 +7,7 @@
   "scripts": {
     "sync:version": "node scripts/sync-version.mjs",
     "version": "npm run sync:version",
-    "build:prepare": "npm run sync:version && rm -rf dist && mkdir -p dist && cp src/manifest.json src/popup.html src/popup.css dist/ && cp -R src/assets dist/assets && cp -R src/_locales dist/_locales",
+    "build:prepare": "npm run sync:version && rm -rf dist && mkdir -p dist && cp src/manifest.json src/popup.html src/popup.css dist/ && cp -R src/assets dist/assets && cp -R src/_locales dist/_locales && cp node_modules/@jsquash/jpeg/codec/enc/mozjpeg_enc.wasm node_modules/@jsquash/webp/codec/enc/webp_enc.wasm node_modules/@jsquash/webp/codec/enc/webp_enc_simd.wasm node_modules/@jsquash/oxipng/codec/pkg/squoosh_oxipng_bg.wasm dist/",
     "build:js": "esbuild src/popup.js --bundle --minify --legal-comments=none --format=esm --platform=browser --target=chrome120 --outfile=dist/popup.js",
     "build": "npm run build:prepare && npm run build:js",
     "build:watch": "npm run build:prepare && esbuild src/popup.js --bundle --minify --legal-comments=none --format=esm --platform=browser --target=chrome120 --outfile=dist/popup.js --watch",
@@ -22,6 +22,9 @@
     "esbuild": "^0.27.3"
   },
   "dependencies": {
+    "@jsquash/jpeg": "^1.6.0",
+    "@jsquash/oxipng": "^2.3.0",
+    "@jsquash/webp": "^1.5.0",
     "fflate": "^0.8.2",
     "upng-js": "^2.1.0"
   }

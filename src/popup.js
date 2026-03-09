@@ -1,4 +1,7 @@
 import { zipSync } from 'fflate';
+import { encode as encodeJpeg } from '@jsquash/jpeg';
+import { optimise as optimisePng } from '@jsquash/oxipng';
+import { encode as encodeWebp } from '@jsquash/webp';
 import UPNG from 'upng-js';
 
 const VIEW_WEB = 'web';
@@ -28,9 +31,9 @@ const EXPORT_RECOMMENDATION_MAX_EDGE = 256;
 const EXPORT_COMPRESSION_LEVELS = ['conservative', 'optimal', 'aggressive'];
 const EXPORT_DEFAULT_COMPRESSION_LEVEL = 'conservative';
 const EXPORT_RECOMMENDATION_ERROR_THRESHOLD = {
-  'image/png': 14,
-  'image/webp': 20,
-  'image/jpeg': 24
+  'image/png': 8.5,
+  'image/webp': 6.4,
+  'image/jpeg': 6.8
 };
 const exportCompressionRecommendationCache = new Map();
 const exportFormatRecommendationCache = new Map();
@@ -2329,7 +2332,109 @@ function resolveRecommendationErrorThreshold(format) {
   return EXPORT_RECOMMENDATION_ERROR_THRESHOLD[safeFormat] || EXPORT_RECOMMENDATION_ERROR_THRESHOLD['image/webp'];
 }
 
-function analyzePngRecommendationCanvas(canvas) {
+function resolveRecommendationRefinementConfig(format, strategy = null) {
+  const safeFormat = normalizeExportFormat(format);
+  const radiusOverride = Math.max(0, Number(strategy?.refinementRadius) || 0);
+  const midpointRadiusOverride = Math.max(0, Number(strategy?.refinementMidpointRadius) || 0);
+  const stepOverride = Math.max(1, Number(strategy?.refinementStep) || 0);
+  if (safeFormat === 'image/png') {
+    return {
+      radius: radiusOverride || 8,
+      midpointRadius: midpointRadiusOverride || 4,
+      step: stepOverride || 2
+    };
+  }
+  return {
+    radius: radiusOverride || 12,
+    midpointRadius: midpointRadiusOverride || 6,
+    step: stepOverride || 2
+  };
+}
+
+function buildRefinedRecommendationCandidates(baseCandidates, recommendedCompressions, format, strategy = null) {
+  const safeFormat = normalizeExportFormat(format);
+  const refinement = resolveRecommendationRefinementConfig(safeFormat, strategy);
+  const maxCompression = Math.max(0, Math.min(100, Number(strategy?.maxCompression) || 100));
+  const candidateSet = new Set();
+  const safeBaseCandidates = Array.isArray(baseCandidates) ? baseCandidates : EXPORT_RECOMMENDATION_CANDIDATES;
+  const addCandidate = (value) => {
+    const normalized = normalizeExportCompression(value);
+    if (normalized > maxCompression) {
+      return;
+    }
+    candidateSet.add(normalized);
+  };
+  const addCandidateBand = (center, radius = refinement.radius) => {
+    const safeCenter = normalizeExportCompression(center);
+    const start = Math.max(0, safeCenter - Math.max(0, radius));
+    const end = Math.min(maxCompression, safeCenter + Math.max(0, radius));
+    for (let value = start; value <= end; value += refinement.step) {
+      addCandidate(value);
+    }
+    addCandidate(start);
+    addCandidate(end);
+  };
+
+  for (const candidate of safeBaseCandidates) {
+    addCandidate(candidate);
+  }
+
+  const pivots = Object.values(recommendedCompressions || {})
+    .filter((value) => Number.isFinite(Number(value)))
+    .map((value) => normalizeExportCompression(value));
+  const sortedPivots = Array.from(new Set(pivots)).sort((left, right) => left - right);
+  for (const pivot of sortedPivots) {
+    addCandidateBand(pivot, refinement.radius);
+  }
+  for (let index = 0; index < sortedPivots.length - 1; index += 1) {
+    const midpoint = Math.round((sortedPivots[index] + sortedPivots[index + 1]) / 2);
+    addCandidateBand(midpoint, refinement.midpointRadius);
+  }
+
+  if ((safeFormat === 'image/webp' || safeFormat === 'image/jpeg') && sortedPivots.some((value) => value <= 0)) {
+    for (const candidate of [2, 4, 6, 10, 12, 14]) {
+      addCandidate(candidate);
+    }
+  }
+
+  return Array.from(candidateSet).sort((left, right) => left - right);
+}
+
+async function refineRecommendationResults(context, format, baseCandidates, results, strategy = null) {
+  let safeResults = Array.isArray(results)
+    ? results
+        .filter((entry) => Number.isFinite(entry?.compression))
+        .sort((left, right) => left.compression - right.compression)
+    : [];
+  let safeCandidates = Array.isArray(baseCandidates)
+    ? baseCandidates.map((candidate) => normalizeExportCompression(candidate)).sort((left, right) => left - right)
+    : [...EXPORT_RECOMMENDATION_CANDIDATES];
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    const recommendedCompressions = pickRecommendedCompressionLevels(safeResults, format, strategy);
+    const refinedCandidates = buildRefinedRecommendationCandidates(safeCandidates, recommendedCompressions, format, strategy);
+    const measuredCompressions = new Set(safeResults.map((entry) => normalizeExportCompression(entry.compression)));
+    const missingCandidates = refinedCandidates.filter((candidate) => !measuredCompressions.has(candidate));
+    safeCandidates = refinedCandidates;
+    if (missingCandidates.length === 0) {
+      return {
+        candidateCompressions: safeCandidates,
+        results: safeResults,
+        recommendedCompressions
+      };
+    }
+    const extraResults = await buildExportRecommendationResults(context, missingCandidates);
+    safeResults = safeResults.concat(extraResults).sort((left, right) => left.compression - right.compression);
+  }
+
+  return {
+    candidateCompressions: safeCandidates,
+    results: safeResults,
+    recommendedCompressions: pickRecommendedCompressionLevels(safeResults, format, strategy)
+  };
+}
+
+function analyzeRecommendationCanvas(canvas) {
   const ctx = canvas?.getContext?.('2d');
   const width = Math.max(1, Number(canvas?.width) || 1);
   const height = Math.max(1, Number(canvas?.height) || 1);
@@ -2408,8 +2513,24 @@ function analyzePngRecommendationCanvas(canvas) {
     smoothRatio,
     hardRatio,
     paletteFriendly: exactColorCount <= 16 && smoothRatio < 0.12,
-    gradientRisk: bucketColorCount >= 96 && smoothRatio >= 0.18 && hardRatio <= 0.5
+    gradientRisk: bucketColorCount >= 96 && smoothRatio >= 0.18 && hardRatio <= 0.5,
+    hardEdgeLowColorRisk:
+      bucketColorCount <= 192 &&
+      exactColorCount <= 320 &&
+      flatRatio >= 0.38 &&
+      smoothRatio <= 0.2 &&
+      hardRatio >= 0.18,
+    strongHardEdgeLowColorRisk:
+      bucketColorCount <= 128 &&
+      exactColorCount <= 128 &&
+      flatRatio >= 0.46 &&
+      smoothRatio <= 0.14 &&
+      hardRatio >= 0.22
   };
+}
+
+function analyzePngRecommendationCanvas(canvas) {
+  return analyzeRecommendationCanvas(canvas);
 }
 
 function resolvePngRecommendationStrategy(analysis) {
@@ -2460,10 +2581,93 @@ function resolvePngRecommendationStrategy(analysis) {
   return base;
 }
 
+function resolveLossyRecommendationStrategy(analysis, format) {
+  const safeFormat = normalizeExportFormat(format);
+  const base = {
+    maxCompression: 100,
+    thresholdScale: 1,
+    sizeGainRatio: 1,
+    compressionBiasScale: 1,
+    promotionThresholdMultiplierScale: 1,
+    promotionMarginScale: 1,
+    aggressiveUpgradeSizeRatioScale: 1,
+    aggressiveUpgradeErrorMultiplierScale: 1,
+    preferHigherCompressionOnTie: true,
+    forcePositiveLossyRecommendation: true,
+    refinementRadius: 12,
+    refinementMidpointRadius: 6,
+    refinementStep: 2,
+    profileThresholdScales: {}
+  };
+  if (!analysis || (safeFormat !== 'image/webp' && safeFormat !== 'image/jpeg')) {
+    return base;
+  }
+
+  if (analysis.strongHardEdgeLowColorRisk) {
+    return {
+      ...base,
+      maxCompression: safeFormat === 'image/jpeg' ? 62 : 68,
+      thresholdScale: 0.62,
+      compressionBiasScale: 0.46,
+      promotionThresholdMultiplierScale: 0.58,
+      promotionMarginScale: 0.6,
+      aggressiveUpgradeSizeRatioScale: 1.06,
+      aggressiveUpgradeErrorMultiplierScale: 0.82,
+      preferHigherCompressionOnTie: false,
+      forcePositiveLossyRecommendation: false,
+      refinementRadius: 8,
+      refinementMidpointRadius: 4,
+      profileThresholdScales: {
+        conservative: 0.8,
+        optimal: 0.88,
+        aggressive: 0.96
+      }
+    };
+  }
+
+  if (analysis.hardEdgeLowColorRisk) {
+    return {
+      ...base,
+      maxCompression: safeFormat === 'image/jpeg' ? 72 : 78,
+      thresholdScale: 0.78,
+      compressionBiasScale: 0.66,
+      promotionThresholdMultiplierScale: 0.76,
+      promotionMarginScale: 0.78,
+      aggressiveUpgradeSizeRatioScale: 1.03,
+      aggressiveUpgradeErrorMultiplierScale: 0.92,
+      preferHigherCompressionOnTie: false,
+      refinementRadius: 10,
+      refinementMidpointRadius: 5,
+      profileThresholdScales: {
+        conservative: 0.88,
+        optimal: 0.94,
+        aggressive: 0.98
+      }
+    };
+  }
+
+  return base;
+}
+
 function resolveRecommendationProfileConfig(profile, format, strategy = null) {
   const safeProfile = String(profile || 'conservative').trim().toLowerCase();
-  const threshold = resolveRecommendationErrorThreshold(format) * Math.max(0.2, Number(strategy?.thresholdScale) || 1);
+  const thresholdScale = Math.max(0.2, Number(strategy?.thresholdScale) || 1);
+  const profileThresholdScale = Math.max(0.2, Number(strategy?.profileThresholdScales?.[safeProfile]) || 1);
+  const threshold = resolveRecommendationErrorThreshold(format) * thresholdScale * profileThresholdScale;
   const sizeGainRatio = Math.min(0.9995, Math.max(0.9, Number(strategy?.sizeGainRatio) || 0.997));
+  const compressionBiasScale = Math.max(0, Number(strategy?.compressionBiasScale) || 1);
+  const promotionThresholdMultiplierScale = Math.max(0.2, Number(strategy?.promotionThresholdMultiplierScale) || 1);
+  const promotionMarginScale = Math.max(0.2, Number(strategy?.promotionMarginScale) || 1);
+  const aggressiveUpgradeSizeRatioScale = Math.max(0.8, Number(strategy?.aggressiveUpgradeSizeRatioScale) || 1);
+  const aggressiveUpgradeErrorMultiplierScale = Math.max(0.5, Number(strategy?.aggressiveUpgradeErrorMultiplierScale) || 1);
+  const preferHigherCompressionOnTie =
+    typeof strategy?.preferHigherCompressionOnTie === 'boolean'
+      ? strategy.preferHigherCompressionOnTie
+      : null;
+  const forcePositiveLossyRecommendation =
+    typeof strategy?.forcePositiveLossyRecommendation === 'boolean'
+      ? strategy.forcePositiveLossyRecommendation
+      : null;
   if (safeProfile === 'aggressive') {
     return {
       threshold: threshold * 1.9,
@@ -2472,14 +2676,14 @@ function resolveRecommendationProfileConfig(profile, format, strategy = null) {
       softErrorScale: 0.01,
       colorPenaltyScale: 0.74,
       hardPenaltyScale: 0.74,
-      compressionBias: 0.1,
-      promotionThresholdMultiplier: 2.45,
+      compressionBias: 0.1 * compressionBiasScale,
+      promotionThresholdMultiplier: 2.45 * promotionThresholdMultiplierScale,
       promotionSizeGainRatio: 1,
-      promotionMargin: 0.18,
-      preferHigherCompressionOnTie: true,
-      forcePositiveLossyRecommendation: true,
-      aggressiveUpgradeSizeRatio: 0.84,
-      aggressiveUpgradeErrorMultiplier: 1.45
+      promotionMargin: 0.18 * promotionMarginScale,
+      preferHigherCompressionOnTie: preferHigherCompressionOnTie ?? true,
+      forcePositiveLossyRecommendation: forcePositiveLossyRecommendation ?? true,
+      aggressiveUpgradeSizeRatio: Math.min(0.98, 0.84 * aggressiveUpgradeSizeRatioScale),
+      aggressiveUpgradeErrorMultiplier: 1.45 * aggressiveUpgradeErrorMultiplierScale
     };
   }
   if (safeProfile === 'optimal') {
@@ -2490,12 +2694,12 @@ function resolveRecommendationProfileConfig(profile, format, strategy = null) {
       softErrorScale: 0.013,
       colorPenaltyScale: 0.82,
       hardPenaltyScale: 0.82,
-      compressionBias: 0.068,
-      promotionThresholdMultiplier: 2.15,
+      compressionBias: 0.068 * compressionBiasScale,
+      promotionThresholdMultiplier: 2.15 * promotionThresholdMultiplierScale,
       promotionSizeGainRatio: 1,
-      promotionMargin: 0.13,
-      preferHigherCompressionOnTie: true,
-      forcePositiveLossyRecommendation: true
+      promotionMargin: 0.13 * promotionMarginScale,
+      preferHigherCompressionOnTie: preferHigherCompressionOnTie ?? true,
+      forcePositiveLossyRecommendation: forcePositiveLossyRecommendation ?? true
     };
   }
   return {
@@ -2505,11 +2709,12 @@ function resolveRecommendationProfileConfig(profile, format, strategy = null) {
     softErrorScale: 0.02,
     colorPenaltyScale: 1,
     hardPenaltyScale: 1,
-    compressionBias: 0,
-    promotionThresholdMultiplier: 1.55,
+    compressionBias: 0 * compressionBiasScale,
+    promotionThresholdMultiplier: 1.55 * promotionThresholdMultiplierScale,
     promotionSizeGainRatio: 0.995,
-    promotionMargin: 0.05,
-    preferHigherCompressionOnTie: false
+    promotionMargin: 0.05 * promotionMarginScale,
+    preferHigherCompressionOnTie: preferHigherCompressionOnTie ?? false,
+    forcePositiveLossyRecommendation: forcePositiveLossyRecommendation ?? false
   };
 }
 
@@ -3104,11 +3309,17 @@ async function estimateRecommendedPngCompressionResultForItem(item, options = {}
   }
   const pngAnalysis = analyzePngRecommendationCanvas(context.canvas);
   const pngStrategy = resolvePngRecommendationStrategy(pngAnalysis);
-  const candidateCompressions = EXPORT_RECOMMENDATION_CANDIDATES.filter(
+  const coarseCandidates = EXPORT_RECOMMENDATION_CANDIDATES.filter(
     (candidate) => normalizeExportCompression(candidate) <= (pngStrategy?.maxCompression ?? 100)
   );
-  const results = await buildExportRecommendationResults(context, candidateCompressions);
-  const recommendedCompressions = pickRecommendedCompressionLevels(results, 'image/png', pngStrategy);
+  const coarseResults = await buildExportRecommendationResults(context, coarseCandidates);
+  const { candidateCompressions, results, recommendedCompressions } = await refineRecommendationResults(
+    context,
+    'image/png',
+    coarseCandidates,
+    coarseResults,
+    pngStrategy
+  );
   return finalizeExportRecommendationLevels(context, results, candidateCompressions, recommendedCompressions);
 }
 
@@ -3117,9 +3328,19 @@ async function estimateRecommendedWebpCompressionResultForItem(item, options = {
   if (context?.fallbackResult) {
     return context.fallbackResult;
   }
-  const candidateCompressions = [...EXPORT_RECOMMENDATION_CANDIDATES];
-  const results = await buildExportRecommendationResults(context, candidateCompressions);
-  const recommendedCompressions = pickRecommendedCompressionLevels(results, 'image/webp');
+  const lossyAnalysis = analyzeRecommendationCanvas(context.canvas);
+  const lossyStrategy = resolveLossyRecommendationStrategy(lossyAnalysis, 'image/webp');
+  const coarseCandidates = EXPORT_RECOMMENDATION_CANDIDATES.filter(
+    (candidate) => normalizeExportCompression(candidate) <= (lossyStrategy?.maxCompression ?? 100)
+  );
+  const coarseResults = await buildExportRecommendationResults(context, coarseCandidates);
+  const { candidateCompressions, results, recommendedCompressions } = await refineRecommendationResults(
+    context,
+    'image/webp',
+    coarseCandidates,
+    coarseResults,
+    lossyStrategy
+  );
   return finalizeExportRecommendationLevels(context, results, candidateCompressions, recommendedCompressions);
 }
 
@@ -3128,9 +3349,19 @@ async function estimateRecommendedJpegCompressionResultForItem(item, options = {
   if (context?.fallbackResult) {
     return context.fallbackResult;
   }
-  const candidateCompressions = [...EXPORT_RECOMMENDATION_CANDIDATES];
-  const results = await buildExportRecommendationResults(context, candidateCompressions);
-  const recommendedCompressions = pickRecommendedCompressionLevels(results, 'image/jpeg');
+  const lossyAnalysis = analyzeRecommendationCanvas(context.canvas);
+  const lossyStrategy = resolveLossyRecommendationStrategy(lossyAnalysis, 'image/jpeg');
+  const coarseCandidates = EXPORT_RECOMMENDATION_CANDIDATES.filter(
+    (candidate) => normalizeExportCompression(candidate) <= (lossyStrategy?.maxCompression ?? 100)
+  );
+  const coarseResults = await buildExportRecommendationResults(context, coarseCandidates);
+  const { candidateCompressions, results, recommendedCompressions } = await refineRecommendationResults(
+    context,
+    'image/jpeg',
+    coarseCandidates,
+    coarseResults,
+    lossyStrategy
+  );
   return finalizeExportRecommendationLevels(context, results, candidateCompressions, recommendedCompressions);
 }
 
@@ -3163,6 +3394,149 @@ async function estimateRecommendedCompressionForItem(item, options = {}) {
   return result.compression;
 }
 
+function computeAverageLumaBlockSsim(referenceLuma, comparedLuma, width, height) {
+  const safeWidth = Math.max(1, Number(width) || 1);
+  const safeHeight = Math.max(1, Number(height) || 1);
+  const blockSize = safeWidth >= 128 || safeHeight >= 128 ? 8 : 6;
+  const c1 = Math.pow(0.01 * 255, 2);
+  const c2 = Math.pow(0.03 * 255, 2);
+  let blockCount = 0;
+  let ssimSum = 0;
+
+  for (let top = 0; top < safeHeight; top += blockSize) {
+    for (let left = 0; left < safeWidth; left += blockSize) {
+      const right = Math.min(safeWidth, left + blockSize);
+      const bottom = Math.min(safeHeight, top + blockSize);
+      const sampleCount = Math.max(1, (right - left) * (bottom - top));
+      let meanReference = 0;
+      let meanCompared = 0;
+
+      for (let y = top; y < bottom; y += 1) {
+        let index = (y * safeWidth) + left;
+        for (let x = left; x < right; x += 1, index += 1) {
+          meanReference += referenceLuma[index];
+          meanCompared += comparedLuma[index];
+        }
+      }
+
+      meanReference /= sampleCount;
+      meanCompared /= sampleCount;
+
+      let varianceReference = 0;
+      let varianceCompared = 0;
+      let covariance = 0;
+      for (let y = top; y < bottom; y += 1) {
+        let index = (y * safeWidth) + left;
+        for (let x = left; x < right; x += 1, index += 1) {
+          const refDelta = referenceLuma[index] - meanReference;
+          const cmpDelta = comparedLuma[index] - meanCompared;
+          varianceReference += refDelta * refDelta;
+          varianceCompared += cmpDelta * cmpDelta;
+          covariance += refDelta * cmpDelta;
+        }
+      }
+
+      const safeDivisor = Math.max(1, sampleCount - 1);
+      varianceReference /= safeDivisor;
+      varianceCompared /= safeDivisor;
+      covariance /= safeDivisor;
+
+      const numerator = ((2 * meanReference * meanCompared) + c1) * ((2 * covariance) + c2);
+      const denominator = (((meanReference * meanReference) + (meanCompared * meanCompared) + c1) * (varianceReference + varianceCompared + c2));
+      const ssim = denominator > 0 ? numerator / denominator : 1;
+      ssimSum += Math.max(0, Math.min(1, ssim));
+      blockCount += 1;
+    }
+  }
+
+  return blockCount > 0 ? ssimSum / blockCount : 1;
+}
+
+function computePerceptualPixelError(referencePixels, comparedPixels, width, height) {
+  if (!(referencePixels instanceof Uint8ClampedArray) || !(comparedPixels instanceof Uint8ClampedArray)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const safeWidth = Math.max(1, Number(width) || 1);
+  const safeHeight = Math.max(1, Number(height) || 1);
+  const pixelCount = Math.max(1, safeWidth * safeHeight);
+  const referenceLuma = new Float32Array(pixelCount);
+  const comparedLuma = new Float32Array(pixelCount);
+  let lumaSquaredError = 0;
+  let chromaSquaredError = 0;
+  let alphaSquaredError = 0;
+
+  for (let pixelIndex = 0, dataIndex = 0; pixelIndex < pixelCount; pixelIndex += 1, dataIndex += 4) {
+    const refR = referencePixels[dataIndex];
+    const refG = referencePixels[dataIndex + 1];
+    const refB = referencePixels[dataIndex + 2];
+    const refA = referencePixels[dataIndex + 3];
+    const cmpR = comparedPixels[dataIndex];
+    const cmpG = comparedPixels[dataIndex + 1];
+    const cmpB = comparedPixels[dataIndex + 2];
+    const cmpA = comparedPixels[dataIndex + 3];
+
+    const refY = (0.299 * refR) + (0.587 * refG) + (0.114 * refB);
+    const cmpY = (0.299 * cmpR) + (0.587 * cmpG) + (0.114 * cmpB);
+    referenceLuma[pixelIndex] = refY;
+    comparedLuma[pixelIndex] = cmpY;
+    const deltaY = cmpY - refY;
+    lumaSquaredError += deltaY * deltaY;
+
+    const refCb = (-0.168736 * refR) - (0.331264 * refG) + (0.5 * refB);
+    const refCr = (0.5 * refR) - (0.418688 * refG) - (0.081312 * refB);
+    const cmpCb = (-0.168736 * cmpR) - (0.331264 * cmpG) + (0.5 * cmpB);
+    const cmpCr = (0.5 * cmpR) - (0.418688 * cmpG) - (0.081312 * cmpB);
+    const deltaCb = cmpCb - refCb;
+    const deltaCr = cmpCr - refCr;
+    chromaSquaredError += (deltaCb * deltaCb) + (deltaCr * deltaCr);
+
+    const deltaA = cmpA - refA;
+    alphaSquaredError += deltaA * deltaA;
+  }
+
+  let gradientSquaredError = 0;
+  let gradientSamples = 0;
+  let strongEdgeSquaredError = 0;
+  let strongEdgeSamples = 0;
+  for (let y = 0; y < safeHeight - 1; y += 1) {
+    for (let x = 0; x < safeWidth - 1; x += 1) {
+      const index = (y * safeWidth) + x;
+      const refDx = referenceLuma[index + 1] - referenceLuma[index];
+      const cmpDx = comparedLuma[index + 1] - comparedLuma[index];
+      const refDy = referenceLuma[index + safeWidth] - referenceLuma[index];
+      const cmpDy = comparedLuma[index + safeWidth] - comparedLuma[index];
+      const deltaDx = cmpDx - refDx;
+      const deltaDy = cmpDy - refDy;
+      const pairSquaredError = (deltaDx * deltaDx) + (deltaDy * deltaDy);
+      gradientSquaredError += pairSquaredError;
+      gradientSamples += 2;
+      const referenceEdgeStrength = Math.abs(refDx) + Math.abs(refDy);
+      if (referenceEdgeStrength >= 28) {
+        const edgeWeight = 1 + Math.min(1.5, referenceEdgeStrength / 96);
+        strongEdgeSquaredError += pairSquaredError * edgeWeight;
+        strongEdgeSamples += 2 * edgeWeight;
+      }
+    }
+  }
+
+  const meanSsim = computeAverageLumaBlockSsim(referenceLuma, comparedLuma, safeWidth, safeHeight);
+  const ssimPenalty = Math.max(0, (1 - meanSsim) * 100);
+  const lumaRmse = Math.sqrt(lumaSquaredError / pixelCount);
+  const chromaRmse = Math.sqrt(chromaSquaredError / (pixelCount * 2));
+  const alphaRmse = Math.sqrt(alphaSquaredError / pixelCount);
+  const gradientRmse = gradientSamples > 0 ? Math.sqrt(gradientSquaredError / gradientSamples) : 0;
+  const strongEdgeRmse = strongEdgeSamples > 0 ? Math.sqrt(strongEdgeSquaredError / strongEdgeSamples) : 0;
+
+  return (
+    (ssimPenalty * 1.35) +
+    (lumaRmse / 4.5) +
+    (gradientRmse / 5.5) +
+    (strongEdgeRmse / 4.1) +
+    (chromaRmse / 9) +
+    (alphaRmse / 8)
+  );
+}
+
 async function computeBlobVisualMse(blob, referencePixels, width, height) {
   if (!(blob instanceof Blob) || !(referencePixels instanceof Uint8ClampedArray)) {
     return Number.POSITIVE_INFINITY;
@@ -3182,18 +3556,9 @@ async function computeBlobVisualMse(blob, referencePixels, width, height) {
     ctx.clearRect(0, 0, safeWidth, safeHeight);
     ctx.drawImage(image, 0, 0, safeWidth, safeHeight);
     const comparedPixels = ctx.getImageData(0, 0, safeWidth, safeHeight).data;
-    const totalChannels = safeWidth * safeHeight * 3.25;
-    let sum = 0;
-    for (let index = 0; index < comparedPixels.length; index += 4) {
-      const dr = comparedPixels[index] - referencePixels[index];
-      const dg = comparedPixels[index + 1] - referencePixels[index + 1];
-      const db = comparedPixels[index + 2] - referencePixels[index + 2];
-      const da = comparedPixels[index + 3] - referencePixels[index + 3];
-      sum += (dr * dr) + (dg * dg) + (db * db) + ((da * da) * 0.25);
-    }
-    return sum / Math.max(1, totalChannels);
+    return computePerceptualPixelError(referencePixels, comparedPixels, safeWidth, safeHeight);
   } catch (error) {
-    console.error('Blob visual MSE failed', error);
+    console.error('Blob visual metric failed', error);
     return Number.POSITIVE_INFINITY;
   } finally {
     URL.revokeObjectURL(objectUrl);
@@ -3783,6 +4148,90 @@ function canvasToBlobAsync(canvas, format, quality) {
   });
 }
 
+function getCanvasImageData(canvas) {
+  const width = Math.max(1, Number(canvas?.width) || 1);
+  const height = Math.max(1, Number(canvas?.height) || 1);
+  const ctx = canvas?.getContext?.('2d');
+  if (!ctx) {
+    throw new Error('canvas_context_unavailable');
+  }
+  return ctx.getImageData(0, 0, width, height);
+}
+
+function resolveEncodeQualityPercent(quality) {
+  const safeQuality = Number.isFinite(Number(quality))
+    ? Math.min(1, Math.max(0, Number(quality)))
+    : resolveLossyQualityFromCompression(EXPORT_DEFAULT_COMPRESSION);
+  return Math.max(1, Math.min(100, Math.round(safeQuality * 100)));
+}
+
+function resolveMozJpegEncodeOptions(quality) {
+  const qualityPercent = resolveEncodeQualityPercent(quality);
+  return {
+    quality: qualityPercent,
+    progressive: true,
+    optimize_coding: true,
+    smoothing: 0,
+    trellis_multipass: qualityPercent < 96,
+    trellis_opt_zero: qualityPercent < 96,
+    trellis_opt_table: qualityPercent < 96,
+    trellis_loops: qualityPercent < 84 ? 2 : 1,
+    auto_subsample: true
+  };
+}
+
+function resolveWebpEncodeOptions(quality) {
+  const qualityPercent = resolveEncodeQualityPercent(quality);
+  return {
+    quality: qualityPercent,
+    method: 6,
+    sns_strength: qualityPercent >= 90 ? 35 : qualityPercent >= 78 ? 55 : 70,
+    filter_strength: qualityPercent >= 90 ? 28 : qualityPercent >= 78 ? 42 : 56,
+    alpha_quality: Math.max(72, qualityPercent),
+    near_lossless: 100,
+    lossless: 0
+  };
+}
+
+function resolveOxipngLevelFromCompression(compression) {
+  const safeCompression = normalizeExportCompression(compression);
+  if (safeCompression >= 80) {
+    return 4;
+  }
+  if (safeCompression >= 44) {
+    return 3;
+  }
+  return 2;
+}
+
+async function encodeJpegFromCanvas(canvas, quality) {
+  const encoded = await encodeJpeg(getCanvasImageData(canvas), resolveMozJpegEncodeOptions(quality));
+  return new Blob([encoded], { type: 'image/jpeg' });
+}
+
+async function encodeWebpFromCanvas(canvas, quality) {
+  const encoded = await encodeWebp(getCanvasImageData(canvas), resolveWebpEncodeOptions(quality));
+  return new Blob([encoded], { type: 'image/webp' });
+}
+
+async function optimizePngArrayBuffer(pngBuffer, compression) {
+  const optimized = await optimisePng(pngBuffer, {
+    level: resolveOxipngLevelFromCompression(compression),
+    interlace: false,
+    optimiseAlpha: false
+  });
+  return new Blob([optimized], { type: 'image/png' });
+}
+
+async function encodeOptimizedPngFromCanvas(canvas, compression) {
+  const optimized = await optimisePng(getCanvasImageData(canvas), {
+    level: resolveOxipngLevelFromCompression(compression),
+    interlace: false,
+    optimiseAlpha: false
+  });
+  return new Blob([optimized], { type: 'image/png' });
+}
+
 function buildExportCanvasFromImage(image, options = {}) {
   const format = normalizeExportFormat(options.format || EXPORT_DEFAULT_FORMAT);
   const targetSize = Math.max(0, Math.round(Number(options.targetSize) || 0));
@@ -4167,8 +4616,32 @@ async function encodeCanvasToExportBlob(canvas, options = {}) {
       : resolveLossyQualityFromCompression(EXPORT_DEFAULT_COMPRESSION)
     : undefined;
   const pngCompression = normalizeExportCompression(options.pngCompression);
-  if (format === 'image/png' && pngCompression > 0) {
-    return encodeQuantizedPngFromCanvas(canvas, pngCompression);
+  if (format === 'image/jpeg') {
+    try {
+      return await encodeJpegFromCanvas(canvas, quality);
+    } catch (error) {
+      console.error('MozJPEG encode failed, fallback to canvas encoder', error);
+      return canvasToBlobAsync(canvas, format, quality);
+    }
+  }
+  if (format === 'image/webp') {
+    try {
+      return await encodeWebpFromCanvas(canvas, quality);
+    } catch (error) {
+      console.error('WebP encode failed, fallback to canvas encoder', error);
+      return canvasToBlobAsync(canvas, format, quality);
+    }
+  }
+  if (format === 'image/png') {
+    if (pngCompression > 0) {
+      return encodeQuantizedPngFromCanvas(canvas, pngCompression);
+    }
+    try {
+      return await encodeOptimizedPngFromCanvas(canvas, pngCompression);
+    } catch (error) {
+      console.error('OXIPNG encode failed, fallback to canvas encoder', error);
+      return canvasToBlobAsync(canvas, 'image/png');
+    }
   }
   return canvasToBlobAsync(canvas, format, quality);
 }
@@ -4184,14 +4657,29 @@ async function encodeQuantizedPngFromCanvas(canvas, compression) {
   const rgba = new Uint8Array(imageData.data);
   const colorCount = resolvePngColorCountFromCompression(compression);
   if (colorCount <= 0) {
-    return canvasToBlobAsync(canvas, 'image/png');
+    try {
+      return await encodeOptimizedPngFromCanvas(canvas, compression);
+    } catch (error) {
+      console.error('OXIPNG encode failed, fallback to canvas PNG', error);
+      return canvasToBlobAsync(canvas, 'image/png');
+    }
   }
   try {
     const encoded = UPNG.encode([rgba.buffer], width, height, colorCount);
-    return new Blob([encoded], { type: 'image/png' });
+    try {
+      return await optimizePngArrayBuffer(encoded, compression);
+    } catch (optimizationError) {
+      console.error('OXIPNG optimise failed after quantization, fallback to raw quantized PNG', optimizationError);
+      return new Blob([encoded], { type: 'image/png' });
+    }
   } catch (error) {
     console.error('UPNG quantization failed, fallback to canvas PNG', error);
-    return canvasToBlobAsync(canvas, 'image/png');
+    try {
+      return await encodeOptimizedPngFromCanvas(canvas, compression);
+    } catch (optimizationError) {
+      console.error('OXIPNG encode failed, fallback to canvas PNG', optimizationError);
+      return canvasToBlobAsync(canvas, 'image/png');
+    }
   }
 }
 
