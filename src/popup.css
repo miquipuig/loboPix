@@ -2532,7 +2532,7 @@ select:disabled {
 
 .export-wizard-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 104px minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -2540,29 +2540,38 @@ select:disabled {
   width: 100%;
   min-height: 56px;
   padding: 10px 12px;
-  border: 1px solid rgba(29, 78, 216, 0.88);
+  border: 1px solid rgba(37, 99, 235, 0.94);
   border-radius: 14px;
   background:
-    radial-gradient(circle at top right, rgba(147, 197, 253, 0.34), transparent 42%),
-    linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+    radial-gradient(circle at top right, rgba(147, 197, 253, 0.28), transparent 42%),
+    linear-gradient(180deg, #3f86f4 0%, #2563eb 100%);
   color: #eff6ff;
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   text-align: left;
-  box-shadow: 0 14px 28px rgba(29, 78, 216, 0.28);
+  box-shadow:
+    0 10px 22px rgba(29, 78, 216, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
   transition:
-    transform 0.16s ease,
-    box-shadow 0.16s ease,
-    filter 0.16s ease;
+    box-shadow 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.24s ease,
+    border-color 0.24s ease;
 }
 
 .export-primary-cta:hover:not(:disabled),
 .export-primary-cta:focus-visible {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 30px rgba(29, 78, 216, 0.34);
-  filter: saturate(1.04);
+  border-color: rgba(59, 130, 246, 0.96);
+  background:
+    radial-gradient(circle at top right, rgba(147, 197, 253, 0.38), transparent 42%),
+    linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  box-shadow:
+    0 18px 38px rgba(29, 78, 216, 0.36),
+    0 8px 18px rgba(59, 130, 246, 0.22),
+    0 0 0 3px rgba(191, 219, 254, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  filter: saturate(1.06) brightness(0.97);
   outline: none;
 }
 
@@ -2570,6 +2579,76 @@ select:disabled {
   opacity: 0.72;
   cursor: progress;
   box-shadow: 0 8px 16px rgba(29, 78, 216, 0.2);
+}
+
+.export-secondary-cta {
+  width: 100%;
+  min-height: 40px;
+  padding: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.46);
+  border-radius: 11px;
+  background: linear-gradient(180deg, #f5f7fa 0%, #e7edf4 100%);
+  color: #596577;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  box-shadow:
+    0 5px 12px rgba(15, 23, 42, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  transition:
+    box-shadow 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.export-secondary-cta:hover:not(:disabled) {
+  border-color: rgba(148, 163, 184, 0.52);
+  background: linear-gradient(180deg, #edf2f7 0%, #dce4ed 100%);
+  box-shadow:
+    0 8px 16px rgba(15, 23, 42, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  color: #495567;
+  outline: none;
+}
+
+.export-secondary-cta:focus-visible {
+  border-color: rgba(148, 163, 184, 0.56);
+  background: linear-gradient(180deg, #edf2f7 0%, #dce4ed 100%);
+  box-shadow:
+    0 0 0 2px rgba(148, 163, 184, 0.12),
+    0 8px 16px rgba(15, 23, 42, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  color: #495567;
+  outline: none;
+}
+
+.export-secondary-cta:disabled {
+  opacity: 0.68;
+  cursor: not-allowed;
+  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.08);
+}
+
+.export-secondary-cta-label {
+  display: block;
+  min-width: 0;
+  max-width: 76px;
+  margin: 0 auto;
+  font-size: 11px;
+  line-height: 1.05;
+  font-weight: 700;
+  color: inherit;
+  white-space: normal;
+  text-wrap: balance;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+@media (max-width: 360px) {
+  .export-wizard-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .export-primary-cta-icon {
@@ -2583,6 +2662,17 @@ select:disabled {
   justify-content: center;
   font-size: 18px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transition:
+    box-shadow 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 0.24s ease,
+    border-color 0.24s ease;
+}
+
+.export-primary-cta:hover:not(:disabled) .export-primary-cta-icon,
+.export-primary-cta:focus-visible .export-primary-cta-icon {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 10px 18px rgba(15, 23, 42, 0.16);
 }
 
 .export-primary-cta-copy {

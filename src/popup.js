@@ -104,6 +104,9 @@ const elements = {
   exportCompressionRange: document.getElementById('exportCompressionRange'),
   exportCompressionValue: document.getElementById('exportCompressionValue'),
   exportCompressionRecommendedDot: document.getElementById('exportCompressionRecommendedDot'),
+  exportWizardOriginalDownloadBtn: document.getElementById('exportWizardOriginalDownloadBtn'),
+  exportWizardOriginalDownloadLabel: document.getElementById('exportWizardOriginalDownloadLabel'),
+  exportWizardOriginalDownloadHint: document.getElementById('exportWizardOriginalDownloadHint'),
   exportWizardCloseBtn: document.getElementById('exportWizardCloseBtn'),
   exportWizardDownloadBtn: document.getElementById('exportWizardDownloadBtn'),
   exportWizardDownloadLabel: document.getElementById('exportWizardDownloadLabel'),
@@ -321,6 +324,12 @@ function bindEvents() {
   if (elements.exportWizardDownloadBtn instanceof HTMLButtonElement) {
     elements.exportWizardDownloadBtn.addEventListener('click', () => {
       void exportWizardDownload();
+    });
+  }
+
+  if (elements.exportWizardOriginalDownloadBtn instanceof HTMLButtonElement) {
+    elements.exportWizardOriginalDownloadBtn.addEventListener('click', () => {
+      void exportWizardDownloadOriginalMatchedSize();
     });
   }
 
@@ -4261,6 +4270,55 @@ async function exportWizardDownload() {
   }
 }
 
+async function exportWizardDownloadOriginalMatchedSize() {
+  if (state.exportWizardBusy || !state.exportWizardItem?.dataUrl) {
+    return;
+  }
+  const baseName = getExportWizardBaseName();
+  if (!baseName) {
+    showFeedbackToast('Escriu un nom valid per exportar', 'error');
+    if (elements.exportWizardNameInput instanceof HTMLInputElement) {
+      elements.exportWizardNameInput.focus();
+      elements.exportWizardNameInput.select();
+    }
+    return;
+  }
+
+  const exportConfig = resolveOriginalMatchedSizeExportConfig();
+  if (!exportConfig.available) {
+    showFeedbackToast(exportConfig.reason || 'No s\'ha pogut exportar en format original', 'error');
+    return;
+  }
+
+  state.exportWizardBusy = true;
+  updateExportWizardActionUi();
+
+  const preset = normalizeExportPreset(state.exportWizardPreset);
+  const editOptions = getCurrentExportEditOptions();
+
+  try {
+    const plan = await resolveOriginalMatchedSizeExportPlan();
+    if (!plan) {
+      throw new Error('original_matched_export_plan_unavailable');
+    }
+    const asset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
+      format: plan.format,
+      preset,
+      targetSize: 0,
+      quality: resolveExportQuality(plan.format, preset, plan.compression),
+      pngCompression: plan.compression,
+      ...editOptions
+    });
+    await downloadBlobAsset(asset.blob, `${baseName}.${exportConfig.extension}`);
+  } catch (error) {
+    console.error('Original matched size export failed', error);
+    showFeedbackToast('No s\'ha pogut exportar en format original', 'error');
+  } finally {
+    state.exportWizardBusy = false;
+    updateExportWizardActionUi();
+  }
+}
+
 function getExportSourceName(item) {
   const sourceName = extractFileNameFromItemSource(item);
   if (sourceName) {
@@ -4902,11 +4960,147 @@ function exportFormatLabel(format) {
   return 'WebP';
 }
 
+function resolveOriginalMatchedSizeExportConfig() {
+  const item = state.exportWizardItem;
+  const originalFormat = extractComparableExportFormatFromDataUrl(item?.dataUrl);
+  const preset = normalizeExportPreset(state.exportWizardPreset);
+  const editOptions = getCurrentExportEditOptions();
+  if (!item?.dataUrl || !originalFormat) {
+    return {
+      available: false,
+      reason: 'Formato original no compatible'
+    };
+  }
+  if (preset === EXPORT_PRESET_FAVICON) {
+    return {
+      available: false,
+      reason: 'No disponible con favicon pack'
+    };
+  }
+  if (editOptions.transparentBackground === true && originalFormat === 'image/jpeg') {
+    return {
+      available: false,
+      reason: 'El JPG original no admite transparencia'
+    };
+  }
+  return {
+    available: true,
+    format: originalFormat,
+    formatLabel: exportFormatLabel(originalFormat),
+    extension: exportExtensionFromFormat(originalFormat)
+  };
+}
+
+function buildExportCompressionSweepCandidates(step = 4) {
+  const safeStep = Math.max(1, Math.round(Number(step) || 1));
+  const candidates = [];
+  for (let compression = 0; compression <= 100; compression += safeStep) {
+    candidates.push(normalizeExportCompression(compression));
+  }
+  if (!candidates.includes(100)) {
+    candidates.push(100);
+  }
+  return Array.from(new Set(candidates)).sort((left, right) => left - right);
+}
+
+function pickClosestExportResultBySizePreferLowerCompression(results, targetSize) {
+  const safeTargetSize = Math.max(1, Number(targetSize) || 1);
+  const valid = Array.isArray(results)
+    ? results.filter((entry) => Number.isFinite(entry?.compression) && Number.isFinite(entry?.size) && entry.size > 0)
+    : [];
+  if (valid.length === 0) {
+    return null;
+  }
+  return valid.reduce((winner, entry) => {
+    if (!winner) {
+      return entry;
+    }
+    const winnerDiff = Math.abs(winner.size - safeTargetSize);
+    const entryDiff = Math.abs(entry.size - safeTargetSize);
+    if (entryDiff < winnerDiff) {
+      return entry;
+    }
+    if (entryDiff > winnerDiff) {
+      return winner;
+    }
+    const winnerFits = winner.size <= safeTargetSize;
+    const entryFits = entry.size <= safeTargetSize;
+    if (entryFits !== winnerFits) {
+      return entryFits ? entry : winner;
+    }
+    if (entryFits && winnerFits && entry.size !== winner.size) {
+      return entry.size > winner.size ? entry : winner;
+    }
+    if (!entryFits && !winnerFits && entry.size !== winner.size) {
+      return entry.size < winner.size ? entry : winner;
+    }
+    return entry.compression < winner.compression ? entry : winner;
+  }, null);
+}
+
+async function resolveOriginalMatchedSizeExportPlan() {
+  const exportConfig = resolveOriginalMatchedSizeExportConfig();
+  if (!exportConfig.available || !state.exportWizardItem?.dataUrl) {
+    return null;
+  }
+  const preset = normalizeExportPreset(state.exportWizardPreset);
+  const editOptions = getCurrentExportEditOptions();
+  const context = await buildExportRecommendationContext(state.exportWizardItem, {
+    format: exportConfig.format,
+    preset,
+    ...editOptions,
+    ignoreInitialCompressionFloor: true
+  }, exportConfig.format);
+  if (context?.fallbackResult) {
+    return {
+      format: exportConfig.format,
+      compression: EXPORT_DEFAULT_COMPRESSION,
+      estimatedSize: Math.max(1, Number(context.fallbackResult.size) || 1)
+    };
+  }
+
+  const coarseCandidates = buildExportCompressionSweepCandidates(4);
+  const measuredResults = [];
+  for (const candidate of coarseCandidates) {
+    measuredResults.push(await context.measureValidationResult(candidate));
+  }
+  const coarseClosest =
+    pickClosestExportResultBySizePreferLowerCompression(measuredResults, context.originalSize) || measuredResults[0];
+  const refinedCandidates = new Set(coarseCandidates);
+  for (
+    let candidate = Math.max(0, normalizeExportCompression(coarseClosest?.compression) - 6);
+    candidate <= Math.min(100, normalizeExportCompression(coarseClosest?.compression) + 6);
+    candidate += 1
+  ) {
+    refinedCandidates.add(candidate);
+  }
+  const refinedResults = measuredResults.slice();
+  for (const candidate of Array.from(refinedCandidates).sort((left, right) => left - right)) {
+    if (measuredResults.some((entry) => normalizeExportCompression(entry.compression) === candidate)) {
+      continue;
+    }
+    refinedResults.push(await context.measureValidationResult(candidate));
+  }
+  const matched =
+    pickClosestExportResultBySizePreferLowerCompression(refinedResults, context.originalSize) ||
+    coarseClosest ||
+    {
+      compression: EXPORT_DEFAULT_COMPRESSION,
+      size: Math.max(1, context.originalSize || 1)
+    };
+  return {
+    format: exportConfig.format,
+    compression: normalizeExportCompression(matched.compression),
+    estimatedSize: Math.max(1, Number(matched.size) || 1)
+  };
+}
+
 function updateExportWizardActionUi() {
   const preset = normalizeExportPreset(state.exportWizardPreset);
   const editOptions = getCurrentExportEditOptions();
   const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
   const formatLabel = exportFormatLabel(format);
+  const originalMatchedExportConfig = resolveOriginalMatchedSizeExportConfig();
   const isBusy = state.exportWizardBusy === true;
   const originalBytes =
     Math.max(0, Number(state.exportWizardItem?.fileSize) || 0) || getDataUrlByteLength(state.exportWizardItem?.dataUrl);
@@ -4935,6 +5129,11 @@ function updateExportWizardActionUi() {
       : gainLabel
         ? `${formatLabel} · ${gainLabel}`
         : `${formatLabel} · Descarga directa`;
+  const originalTitle = isBusy
+    ? 'Exportando...'
+    : originalMatchedExportConfig.available
+      ? 'Exportar sin pérdidas'
+      : 'Sin pérdidas no disponible';
 
   if (elements.exportWizardDownloadBtn instanceof HTMLButtonElement) {
     elements.exportWizardDownloadBtn.disabled = isBusy;
@@ -4946,6 +5145,14 @@ function updateExportWizardActionUi() {
   }
   if (elements.exportWizardDownloadHint instanceof HTMLElement) {
     elements.exportWizardDownloadHint.textContent = hint;
+  }
+  if (elements.exportWizardOriginalDownloadBtn instanceof HTMLButtonElement) {
+    elements.exportWizardOriginalDownloadBtn.disabled = isBusy || !originalMatchedExportConfig.available;
+    elements.exportWizardOriginalDownloadBtn.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+    elements.exportWizardOriginalDownloadBtn.title = originalTitle;
+  }
+  if (elements.exportWizardOriginalDownloadLabel instanceof HTMLElement) {
+    elements.exportWizardOriginalDownloadLabel.textContent = 'Exportar sin pérdidas';
   }
 }
 
