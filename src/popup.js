@@ -32,6 +32,7 @@ const EXPORT_RECOMMENDATION_ERROR_THRESHOLD = {
 };
 const exportCompressionRecommendationCache = new Map();
 const exportFormatRecommendationCache = new Map();
+const exportFormatAnalysisCache = new Map();
 
 const elements = {
   popupRoot: document.getElementById('popupRoot'),
@@ -127,6 +128,9 @@ const state = {
   exportWizardPassthroughCompression: null,
   exportWizardFormatTouched: false,
   exportWizardFormatRecommendationToken: 0,
+  exportWizardFormatAnalysisToken: 0,
+  exportWizardFormatAnalysesKey: '',
+  exportWizardFormatAnalyses: {},
   exportWizardRecommendationToken: 0,
   exportWizardCompressionTouched: false,
   exportWizardCropEnabled: false,
@@ -1762,6 +1766,169 @@ function setExportPassthroughCompression(compression) {
     : null;
 }
 
+function normalizeExportRecommendationResult(result) {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const compression = Number.isFinite(Number(result.compression))
+    ? normalizeExportCompression(result.compression)
+    : null;
+  const size = Math.max(0, Number(result.size) || 0);
+  if (compression === null || size <= 0) {
+    return null;
+  }
+  return {
+    compression,
+    size,
+    passthroughCompression: Number.isFinite(Number(result.passthroughCompression))
+      ? normalizeExportCompression(result.passthroughCompression)
+      : null
+  };
+}
+
+function cloneExportRecommendationResult(result) {
+  const normalized = normalizeExportRecommendationResult(result);
+  return normalized ? { ...normalized } : null;
+}
+
+function cloneExportFormatAnalyses(analyses) {
+  const next = {};
+  if (!analyses || typeof analyses !== 'object') {
+    return next;
+  }
+  for (const format of EXPORT_FORMAT_CANDIDATES) {
+    const normalized = normalizeExportRecommendationResult(analyses[format]);
+    if (normalized) {
+      next[format] = normalized;
+    }
+  }
+  return next;
+}
+
+function hasCompleteExportFormatAnalyses(analyses, candidates = EXPORT_FORMAT_CANDIDATES) {
+  return candidates.every((format) => normalizeExportRecommendationResult(analyses?.[normalizeExportFormat(format)]));
+}
+
+function storeExportWizardFormatAnalyses(key, analyses) {
+  state.exportWizardFormatAnalysesKey = String(key || '').trim();
+  state.exportWizardFormatAnalyses = cloneExportFormatAnalyses(analyses);
+}
+
+function getCachedExportRecommendation(cacheKey) {
+  const safeKey = String(cacheKey || '').trim();
+  if (!safeKey) {
+    return null;
+  }
+  return cloneExportRecommendationResult(exportCompressionRecommendationCache.get(safeKey));
+}
+
+function setCachedExportRecommendation(cacheKey, result) {
+  const safeKey = String(cacheKey || '').trim();
+  const normalized = normalizeExportRecommendationResult(result);
+  if (!safeKey || !normalized) {
+    return null;
+  }
+  exportCompressionRecommendationCache.set(safeKey, normalized);
+  return { ...normalized };
+}
+
+function getExportWizardFormatAnalysesForCurrentState() {
+  if (!state.exportWizardItem?.dataUrl) {
+    return {};
+  }
+  const preset = normalizeExportPreset(state.exportWizardPreset);
+  const editOptions = getCurrentExportEditOptions();
+  const analysisKey = resolveFormatRecommendationCacheKey(state.exportWizardItem, preset, editOptions);
+  if (state.exportWizardFormatAnalysesKey !== analysisKey) {
+    return {};
+  }
+  return cloneExportFormatAnalyses(state.exportWizardFormatAnalyses);
+}
+
+function rememberExportWizardFormatAnalysis(format, result, item, preset, editOptions = {}) {
+  const normalized = normalizeExportRecommendationResult(result);
+  if (!normalized || !item?.dataUrl) {
+    return null;
+  }
+  const safeFormat = normalizeExportFormat(format);
+  const analysisKey = resolveFormatRecommendationCacheKey(item, preset, editOptions);
+  const currentAnalyses =
+    state.exportWizardFormatAnalysesKey === analysisKey ? cloneExportFormatAnalyses(state.exportWizardFormatAnalyses) : {};
+  currentAnalyses[safeFormat] = normalized;
+  storeExportWizardFormatAnalyses(analysisKey, currentAnalyses);
+  const cachedAnalyses = cloneExportFormatAnalyses(exportFormatAnalysisCache.get(analysisKey));
+  cachedAnalyses[safeFormat] = normalized;
+  exportFormatAnalysisCache.set(analysisKey, cachedAnalyses);
+  return { ...normalized };
+}
+
+function resolveBestExportFormatFromAnalyses(analyses, candidates = EXPORT_FORMAT_CANDIDATES) {
+  const safeCandidates = Array.isArray(candidates)
+    ? candidates.map((candidate) => normalizeExportFormat(candidate))
+    : EXPORT_FORMAT_CANDIDATES;
+  const available = safeCandidates
+    .map((format) => ({
+      format,
+      result: normalizeExportRecommendationResult(analyses?.[format])
+    }))
+    .filter((entry) => entry.result);
+  if (available.length === 0) {
+    return '';
+  }
+  const best = available.reduce((winner, entry) => {
+    if (!winner) {
+      return entry;
+    }
+    return entry.result.size < winner.result.size ? entry : winner;
+  }, null);
+  return normalizeExportFormat(best?.format || safeCandidates[0]);
+}
+
+function pickClosestExportResultBySize(results, targetSize) {
+  const safeTargetSize = Math.max(1, Number(targetSize) || 1);
+  const valid = Array.isArray(results)
+    ? results.filter((entry) => Number.isFinite(entry?.compression) && Number.isFinite(entry?.size) && entry.size > 0)
+    : [];
+  if (valid.length === 0) {
+    return null;
+  }
+  return valid.reduce((winner, entry) => {
+    if (!winner) {
+      return entry;
+    }
+    const winnerDiff = Math.abs(winner.size - safeTargetSize);
+    const entryDiff = Math.abs(entry.size - safeTargetSize);
+    if (entryDiff < winnerDiff) {
+      return entry;
+    }
+    if (entryDiff > winnerDiff) {
+      return winner;
+    }
+    const winnerFits = winner.size <= safeTargetSize;
+    const entryFits = entry.size <= safeTargetSize;
+    if (entryFits !== winnerFits) {
+      return entryFits ? entry : winner;
+    }
+    if (entry.size !== winner.size) {
+      return entry.size < winner.size ? entry : winner;
+    }
+    return entry.compression > winner.compression ? entry : winner;
+  }, null);
+}
+
+async function measureExportSizeForCompression(canvas, format, preset, compression) {
+  const safeCompression = normalizeExportCompression(compression);
+  const blob = await encodeCanvasToExportBlob(canvas, {
+    format,
+    quality: resolveExportQuality(format, preset, safeCompression),
+    pngCompression: safeCompression
+  });
+  return {
+    compression: safeCompression,
+    size: Math.max(1, Number(blob?.size) || 1)
+  };
+}
+
 function resolveExportPreviewTargetSize(item, preset, editOptions = {}) {
   const safePreset = normalizeExportPreset(preset);
   if (safePreset !== EXPORT_PRESET_FAVICON) {
@@ -1812,6 +1979,87 @@ function resolveFormatRecommendationCacheKey(item, preset, editOptions = {}) {
       : 'opaque'
   ].join('|');
   return `${itemId}|${width}x${height}|${size}|${safePreset}|${editSignature}`;
+}
+
+async function ensureExportWizardFormatAnalyses(options = {}) {
+  if (!state.exportWizardItem?.dataUrl) {
+    return {};
+  }
+  const force = options.force === true;
+  const item = state.exportWizardItem;
+  const preset = normalizeExportPreset(state.exportWizardPreset);
+  const editOptions = getCurrentExportEditOptions();
+  const candidates = resolveExportFormatCandidates(preset, editOptions);
+  const analysisKey = resolveFormatRecommendationCacheKey(item, preset, editOptions);
+
+  if (!force && state.exportWizardFormatAnalysesKey === analysisKey) {
+    const currentAnalyses = cloneExportFormatAnalyses(state.exportWizardFormatAnalyses);
+    if (hasCompleteExportFormatAnalyses(currentAnalyses, candidates)) {
+      return currentAnalyses;
+    }
+  }
+
+  if (!force) {
+    const cachedAnalyses = cloneExportFormatAnalyses(exportFormatAnalysisCache.get(analysisKey));
+    if (hasCompleteExportFormatAnalyses(cachedAnalyses, candidates)) {
+      storeExportWizardFormatAnalyses(analysisKey, cachedAnalyses);
+      const bestFormat = resolveBestExportFormatFromAnalyses(cachedAnalyses, candidates);
+      if (bestFormat) {
+        exportFormatRecommendationCache.set(analysisKey, bestFormat);
+      }
+      return cachedAnalyses;
+    }
+  }
+
+  const token = state.exportWizardFormatAnalysisToken + 1;
+  state.exportWizardFormatAnalysisToken = token;
+
+  const analyses = {};
+  try {
+    const results = await Promise.all(
+      candidates.map(async (format) => {
+        const cacheKey = resolveRecommendationCacheKey(item, format, preset, editOptions);
+        const cached = !force ? getCachedExportRecommendation(cacheKey) : null;
+        if (cached) {
+          return [format, cached];
+        }
+        const recommended = await estimateRecommendedCompressionResultForItem(item, {
+          format,
+          preset,
+          ...editOptions
+        });
+        return [format, setCachedExportRecommendation(cacheKey, recommended)];
+      })
+    );
+
+    if (token !== state.exportWizardFormatAnalysisToken || !state.exportWizardItem?.dataUrl) {
+      return getExportWizardFormatAnalysesForCurrentState();
+    }
+
+    for (const [format, result] of results) {
+      const normalized = normalizeExportRecommendationResult(result);
+      if (normalized) {
+        analyses[normalizeExportFormat(format)] = normalized;
+      }
+    }
+
+    const safeAnalyses = cloneExportFormatAnalyses(analyses);
+    exportFormatAnalysisCache.set(analysisKey, safeAnalyses);
+    storeExportWizardFormatAnalyses(analysisKey, safeAnalyses);
+
+    const bestFormat = resolveBestExportFormatFromAnalyses(safeAnalyses, candidates);
+    if (bestFormat) {
+      exportFormatRecommendationCache.set(analysisKey, bestFormat);
+    }
+
+    return safeAnalyses;
+  } catch (error) {
+    console.error('Format analysis failed', error);
+    if (token !== state.exportWizardFormatAnalysisToken) {
+      return getExportWizardFormatAnalysesForCurrentState();
+    }
+    return {};
+  }
 }
 
 function resolveExportFormatCandidates(preset, editOptions = {}) {
@@ -2024,24 +2272,15 @@ async function applyRecommendedCompressionForCurrentExport(options = {}) {
   const editOptions = getCurrentExportEditOptions();
   const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
   const cacheKey = resolveRecommendationCacheKey(item, format, preset, editOptions);
+  const analysisKey = resolveFormatRecommendationCacheKey(item, preset, editOptions);
   const token = state.exportWizardRecommendationToken + 1;
   state.exportWizardRecommendationToken = token;
 
-  const cached = exportCompressionRecommendationCache.get(cacheKey);
-  const cachedResult =
-    cached && typeof cached === 'object'
-      ? {
-          compression: normalizeExportCompression(cached.compression),
-          passthroughCompression: Number.isFinite(Number(cached.passthroughCompression))
-            ? normalizeExportCompression(cached.passthroughCompression)
-            : null
-        }
-      : Number.isFinite(Number(cached))
-        ? {
-            compression: normalizeExportCompression(cached),
-            passthroughCompression: null
-          }
-        : null;
+  const analyses =
+    options.analyses && typeof options.analyses === 'object'
+      ? cloneExportFormatAnalyses(options.analyses)
+      : getExportWizardFormatAnalysesForCurrentState();
+  const cachedResult = normalizeExportRecommendationResult(analyses[format]) || getCachedExportRecommendation(cacheKey);
   if (cachedResult) {
     if (token !== state.exportWizardRecommendationToken || !state.exportWizardItem?.dataUrl) {
       return;
@@ -2067,13 +2306,13 @@ async function applyRecommendedCompressionForCurrentExport(options = {}) {
     if (token !== state.exportWizardRecommendationToken || !state.exportWizardItem?.dataUrl) {
       return;
     }
-    const safeRecommended = {
-      compression: normalizeExportCompression(recommended.compression),
-      passthroughCompression: Number.isFinite(Number(recommended.passthroughCompression))
-        ? normalizeExportCompression(recommended.passthroughCompression)
-        : null
-    };
-    exportCompressionRecommendationCache.set(cacheKey, safeRecommended);
+    const safeRecommended = setCachedExportRecommendation(cacheKey, recommended);
+    if (!safeRecommended) {
+      throw new Error('invalid_recommendation_result');
+    }
+    if (state.exportWizardFormatAnalysesKey === analysisKey) {
+      rememberExportWizardFormatAnalysis(format, safeRecommended, item, preset, editOptions);
+    }
     setExportRecommendedCompression(safeRecommended.compression);
     setExportPassthroughCompression(safeRecommended.passthroughCompression);
     if (apply && (!state.exportWizardCompressionTouched || force)) {
@@ -2105,6 +2344,7 @@ async function autoSelectBestFormatForCurrentExport(options = {}) {
   const preset = normalizeExportPreset(state.exportWizardPreset);
   const editOptions = getCurrentExportEditOptions();
   const candidates = resolveExportFormatCandidates(preset, editOptions);
+  const cacheKey = resolveFormatRecommendationCacheKey(item, preset, editOptions);
   if (candidates.length <= 1) {
     const onlyFormat = normalizeExportFormat(candidates[0] || resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions));
     if (state.exportWizardFormat !== onlyFormat) {
@@ -2114,8 +2354,6 @@ async function autoSelectBestFormatForCurrentExport(options = {}) {
     return state.exportWizardFormat;
   }
 
-  const cacheKey = resolveFormatRecommendationCacheKey(item, preset, editOptions);
-  const cached = exportFormatRecommendationCache.get(cacheKey);
   const applyRecommendedFormat = (format) => {
     const safeFormat = normalizeExportFormat(format);
     if (state.exportWizardFormat !== safeFormat) {
@@ -2125,6 +2363,23 @@ async function autoSelectBestFormatForCurrentExport(options = {}) {
     return state.exportWizardFormat;
   };
 
+  const hasProvidedAnalyses = options.analyses && typeof options.analyses === 'object';
+  let analyses =
+    hasProvidedAnalyses
+      ? cloneExportFormatAnalyses(options.analyses)
+      : getExportWizardFormatAnalysesForCurrentState();
+  if (!hasCompleteExportFormatAnalyses(analyses, candidates) && !hasProvidedAnalyses) {
+    analyses = await ensureExportWizardFormatAnalyses({ force: options.forceAnalysis === true });
+  }
+  if (hasCompleteExportFormatAnalyses(analyses, candidates)) {
+    const bestFormat = resolveBestExportFormatFromAnalyses(analyses, candidates);
+    if (bestFormat) {
+      exportFormatRecommendationCache.set(cacheKey, bestFormat);
+      return applyRecommendedFormat(bestFormat);
+    }
+  }
+
+  const cached = exportFormatRecommendationCache.get(cacheKey);
   if (typeof cached === 'string' && cached) {
     return applyRecommendedFormat(cached);
   }
@@ -2171,17 +2426,19 @@ async function autoSelectBestFormatForCurrentExport(options = {}) {
 async function refreshExportFormatAndCompressionRecommendations(options = {}) {
   if (!state.exportWizardItem?.dataUrl) {
     setExportRecommendedCompression(null);
+    setExportPassthroughCompression(null);
     return;
   }
 
   const forceFormat = options.forceFormat === true;
+  const analyses = await ensureExportWizardFormatAnalyses({ force: options.forceAnalysis === true });
   const previousFormat = state.exportWizardFormat;
-  await autoSelectBestFormatForCurrentExport({ force: forceFormat });
+  await autoSelectBestFormatForCurrentExport({ force: forceFormat, analyses });
   if (previousFormat !== state.exportWizardFormat) {
     state.exportWizardCompressionTouched = false;
     await refreshExportWizardPreview();
   }
-  await applyRecommendedCompressionForCurrentExport({ force: true, apply: true });
+  await applyRecommendedCompressionForCurrentExport({ force: true, apply: true, analyses });
 }
 
 async function estimateRecommendedCompressionResultForItem(item, options = {}) {
@@ -2251,54 +2508,52 @@ async function estimateRecommendedCompressionResultForItem(item, options = {}) {
   }
 
   const recommendedCompression = pickRecommendedCompression(results, format, pngStrategy);
-  const originalComparableFormat = extractComparableExportFormatFromDataUrl(item?.dataUrl);
-  const shouldCapToOriginalSize = originalComparableFormat === format && originalSize > 0;
   const firstResult = results[0] || { compression: EXPORT_DEFAULT_COMPRESSION, size: Math.max(1, originalSize || 1) };
-  let recommendedResult =
+  const recommendedAnalysisResult =
     results.find((entry) => entry.compression === recommendedCompression) ||
     results.find((entry) => entry.compression === 0) ||
     firstResult;
-  let adjustedToOriginalSize = false;
+  const validationCanvas = buildExportCanvasFromImage(image, {
+    format,
+    targetSize: resolveExportValidationTargetSize(item, preset, editOptions),
+    ...editOptions
+  });
+  const validationResults = new Map();
+  const measureValidationResult = async (compression) => {
+    const safeCompression = normalizeExportCompression(compression);
+    if (validationResults.has(safeCompression)) {
+      return validationResults.get(safeCompression);
+    }
+    const measured = await measureExportSizeForCompression(validationCanvas, format, preset, safeCompression);
+    validationResults.set(safeCompression, measured);
+    return measured;
+  };
 
-  if (shouldCapToOriginalSize && recommendedResult.size > originalSize) {
-    const validationCanvas = buildExportCanvasFromImage(image, {
-      format,
-      targetSize: resolveExportValidationTargetSize(item, preset, editOptions),
-      ...editOptions
-    });
-    let smallestRealResult = null;
+  const recommendedResult = await measureValidationResult(recommendedAnalysisResult.compression);
+  const originalComparableFormat = extractComparableExportFormatFromDataUrl(item?.dataUrl);
+  const shouldMatchOriginalSize = canPassthroughOriginal && originalComparableFormat === format && originalSize > 0;
+
+  if (shouldMatchOriginalSize && recommendedResult.size >= originalSize) {
     const comparableCandidates = candidateCompressions.filter((candidate) => normalizeExportCompression(candidate) > 0);
-
+    const comparableResults = [];
     for (const candidate of comparableCandidates) {
-      const compression = normalizeExportCompression(candidate);
-      const blob = await encodeCanvasToExportBlob(validationCanvas, {
-        format,
-        quality: resolveExportQuality(format, preset, compression),
-        pngCompression: compression
-      });
-      const size = Math.max(1, Number(blob?.size) || 1);
-      const entry = { compression, size };
-      if (!smallestRealResult || size < smallestRealResult.size) {
-        smallestRealResult = entry;
-      }
-      if (size <= originalSize) {
-        recommendedResult = entry;
-        adjustedToOriginalSize = true;
-        break;
-      }
+      comparableResults.push(await measureValidationResult(candidate));
     }
-
-    if ((!Number.isFinite(Number(recommendedResult?.size)) || recommendedResult.size > originalSize) && smallestRealResult) {
-      recommendedResult = smallestRealResult;
-      adjustedToOriginalSize = true;
-    }
+    const equivalentResult = pickClosestExportResultBySize(comparableResults, originalSize) || {
+      compression: 0,
+      size: Math.max(1, originalSize)
+    };
+    return {
+      compression: normalizeExportCompression(equivalentResult.compression),
+      size: Math.max(1, originalSize),
+      passthroughCompression: normalizeExportCompression(equivalentResult.compression)
+    };
   }
+
   return {
     compression: normalizeExportCompression(recommendedResult.compression),
     size: Math.max(1, Number(recommendedResult?.size) || 1),
-    passthroughCompression: canPassthroughOriginal && adjustedToOriginalSize
-      ? normalizeExportCompression(recommendedResult.compression)
-      : null
+    passthroughCompression: null
   };
 }
 
@@ -2479,6 +2734,9 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardTransparentPointerId = null;
   state.exportWizardEstimatedOutputBytes = 0;
   state.exportWizardFormatRecommendationToken += 1;
+  state.exportWizardFormatAnalysisToken += 1;
+  state.exportWizardFormatAnalysesKey = '';
+  state.exportWizardFormatAnalyses = {};
   state.exportWizardRecommendationToken += 1;
   state.exportWizardBusy = false;
 
@@ -2587,6 +2845,9 @@ function closeExportWizardModal() {
   state.exportWizardPreviewToken += 1;
   state.exportWizardFormatTouched = false;
   state.exportWizardFormatRecommendationToken += 1;
+  state.exportWizardFormatAnalysisToken += 1;
+  state.exportWizardFormatAnalysesKey = '';
+  state.exportWizardFormatAnalyses = {};
   state.exportWizardRecommendationToken += 1;
   state.exportWizardCompressionTouched = false;
   state.exportWizardPassthroughCompression = null;
