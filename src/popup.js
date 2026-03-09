@@ -159,6 +159,7 @@ const state = {
   exportWizardTransparentPointerId: null,
   exportWizardEstimatedOutputBytes: 0,
   exportWizardPreviewUrl: '',
+  exportWizardCropEditorPreviewUrl: '',
   exportWizardPreviewToken: 0,
   exportWizardPreviewLoadingTimeout: null,
   exportWizardBusy: false,
@@ -1524,7 +1525,7 @@ function updateExportCropUi() {
     elements.exportCropToggleBtn.title = cropEnabled ? 'Desactivar recorte' : 'Recortar';
   }
   if (elements.exportCropEditorImg instanceof HTMLImageElement) {
-    const source = String(state.exportWizardItem?.dataUrl || '').trim();
+    const source = String(state.exportWizardCropEditorPreviewUrl || state.exportWizardItem?.dataUrl || '').trim();
     if (source) {
       if (elements.exportCropEditorImg.src !== source) {
         elements.exportCropEditorImg.src = source;
@@ -1816,6 +1817,14 @@ function setExportWizardPreviewLoading(isLoading, options = {}) {
     }
     elements.exportWizardPreviewLoading.classList.remove('hidden');
   }, delayMs);
+}
+
+function setExportWizardCropEditorPreviewUrl(nextUrl) {
+  const safeNextUrl = String(nextUrl || '').trim();
+  if (state.exportWizardCropEditorPreviewUrl && state.exportWizardCropEditorPreviewUrl !== safeNextUrl) {
+    URL.revokeObjectURL(state.exportWizardCropEditorPreviewUrl);
+  }
+  state.exportWizardCropEditorPreviewUrl = safeNextUrl;
 }
 
 function setExportRecommendedCompression(compression) {
@@ -3882,6 +3891,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
   if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
     elements.exportWizardPreviewImg.removeAttribute('src');
   }
+  setExportWizardCropEditorPreviewUrl('');
   setExportWizardPreviewLoading(false);
 
   closeSaveAsModal();
@@ -3950,6 +3960,7 @@ function closeExportWizardModal() {
     URL.revokeObjectURL(state.exportWizardPreviewUrl);
   }
   state.exportWizardPreviewUrl = '';
+  setExportWizardCropEditorPreviewUrl('');
   state.exportWizardItem = null;
   state.exportWizardPreviewToken += 1;
   state.exportWizardFormatTouched = false;
@@ -4002,13 +4013,6 @@ async function refreshExportWizardPreview() {
 
   const token = state.exportWizardPreviewToken + 1;
   state.exportWizardPreviewToken = token;
-  setExportWizardPreviewLoading(true, {
-    delayMs: state.exportWizardPreviewUrl ? 220 : 120,
-    token
-  });
-  if (elements.exportWizardPreviewMeta instanceof HTMLElement && !state.exportWizardPreviewUrl) {
-    elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
-  }
   const passthroughCompression = state.exportWizardPassthroughCompression;
 
   const preset = normalizeExportPreset(state.exportWizardPreset);
@@ -4020,6 +4024,34 @@ async function refreshExportWizardPreview() {
     preset === EXPORT_PRESET_FAVICON ? resolveFaviconMaxSourceSize(state.exportWizardItem, editOptions) : 0;
   const imagePreviewSize = preset === EXPORT_PRESET_FAVICON ? 0 : exportPreviewSize;
   const quality = resolveExportQuality(format, preset, state.exportWizardCompression);
+  const needsTransparentCropStagePreview =
+    editOptions.cropEnabled === true &&
+    editOptions.transparentBackground === true &&
+    format !== 'image/jpeg';
+  const hasStableTransparentCropStagePreview =
+    needsTransparentCropStagePreview &&
+    String(state.exportWizardCropEditorPreviewUrl || '').trim() !== '';
+
+  if (hasStableTransparentCropStagePreview) {
+    setExportWizardPreviewLoading(false);
+  } else {
+    setExportWizardPreviewLoading(true, {
+      delayMs: state.exportWizardPreviewUrl ? 220 : 120,
+      token
+    });
+  }
+  if (
+    elements.exportWizardPreviewMeta instanceof HTMLElement &&
+    !state.exportWizardPreviewUrl &&
+    !hasStableTransparentCropStagePreview
+  ) {
+    elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
+  }
+
+  if (!needsTransparentCropStagePreview && state.exportWizardCropEditorPreviewUrl) {
+    setExportWizardCropEditorPreviewUrl('');
+    updateExportCropUi();
+  }
 
   try {
     const previewAsset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
@@ -4033,6 +4065,25 @@ async function refreshExportWizardPreview() {
     });
     if (token !== state.exportWizardPreviewToken) {
       return;
+    }
+
+    if (needsTransparentCropStagePreview) {
+      const cropStageAsset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
+        format,
+        preset,
+        targetSize: imagePreviewSize,
+        quality,
+        pngCompression: state.exportWizardCompression,
+        passthroughCompression,
+        ...editOptions,
+        cropEnabled: false,
+        cropRect: createFullExportCropRect()
+      });
+      if (token !== state.exportWizardPreviewToken) {
+        return;
+      }
+      setExportWizardCropEditorPreviewUrl(URL.createObjectURL(cropStageAsset.blob));
+      updateExportCropUi();
     }
 
     const metaAsset =
