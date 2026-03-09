@@ -160,6 +160,7 @@ const state = {
   exportWizardEstimatedOutputBytes: 0,
   exportWizardPreviewUrl: '',
   exportWizardPreviewToken: 0,
+  exportWizardPreviewLoadingTimeout: null,
   exportWizardBusy: false,
   toastTimer: null,
   fileDragDepth: 0,
@@ -1788,11 +1789,33 @@ function updateExportCompressionUi() {
   }
 }
 
-function setExportWizardPreviewLoading(isLoading) {
+function setExportWizardPreviewLoading(isLoading, options = {}) {
   if (!(elements.exportWizardPreviewLoading instanceof HTMLElement)) {
     return;
   }
-  elements.exportWizardPreviewLoading.classList.toggle('hidden', isLoading !== true);
+  if (state.exportWizardPreviewLoadingTimeout !== null) {
+    window.clearTimeout(state.exportWizardPreviewLoadingTimeout);
+    state.exportWizardPreviewLoadingTimeout = null;
+  }
+  if (isLoading !== true) {
+    elements.exportWizardPreviewLoading.classList.add('hidden');
+    return;
+  }
+  const delayMs = Math.max(0, Math.round(Number(options.delayMs) || 0));
+  if (delayMs <= 0) {
+    elements.exportWizardPreviewLoading.classList.remove('hidden');
+    return;
+  }
+  const expectedToken = Number.isFinite(Number(options.token))
+    ? Math.max(0, Number(options.token))
+    : state.exportWizardPreviewToken;
+  state.exportWizardPreviewLoadingTimeout = window.setTimeout(() => {
+    state.exportWizardPreviewLoadingTimeout = null;
+    if (expectedToken !== state.exportWizardPreviewToken || !state.exportWizardItem?.dataUrl) {
+      return;
+    }
+    elements.exportWizardPreviewLoading.classList.remove('hidden');
+  }, delayMs);
 }
 
 function setExportRecommendedCompression(compression) {
@@ -3859,7 +3882,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
   if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
     elements.exportWizardPreviewImg.removeAttribute('src');
   }
-  setExportWizardPreviewLoading(true);
+  setExportWizardPreviewLoading(false);
 
   closeSaveAsModal();
   closeManualUploadModal();
@@ -3979,7 +4002,10 @@ async function refreshExportWizardPreview() {
 
   const token = state.exportWizardPreviewToken + 1;
   state.exportWizardPreviewToken = token;
-  setExportWizardPreviewLoading(true);
+  setExportWizardPreviewLoading(true, {
+    delayMs: state.exportWizardPreviewUrl ? 220 : 120,
+    token
+  });
   if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
     elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
   }
