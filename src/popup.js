@@ -379,6 +379,9 @@ function bindEvents() {
   }
   if (elements.exportTransparentBgBtn instanceof HTMLButtonElement) {
     elements.exportTransparentBgBtn.addEventListener('click', () => {
+      if (elements.exportTransparentBgBtn.disabled) {
+        return;
+      }
       const shouldEnable = state.exportWizardTransparentBackground !== true;
       if (shouldEnable) {
         setExportTransparentTolerance(EXPORT_BACKGROUND_TOLERANCE_ACTIVE_DEFAULT);
@@ -1709,30 +1712,37 @@ function handleExportCropPointerUp(event) {
 
 function updateExportTransparentBackgroundUi() {
   const enabled = normalizeExportBackgroundTolerance(state.exportWizardBackgroundTolerance) > 0;
+  const canUseTransparency = normalizeExportFormat(state.exportWizardFormat) !== 'image/jpeg';
   state.exportWizardTransparentBackground = enabled;
   const tolerance = normalizeExportBackgroundTolerance(state.exportWizardBackgroundTolerance);
   const protection = normalizeExportBackgroundProtection(state.exportWizardBackgroundProtection);
   state.exportWizardBackgroundTolerance = tolerance;
   state.exportWizardBackgroundProtection = protection;
   if (elements.exportTransparentBgBtn instanceof HTMLButtonElement) {
+    elements.exportTransparentBgBtn.disabled = !canUseTransparency;
     elements.exportTransparentBgBtn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
     elements.exportTransparentBgBtn.setAttribute(
       'aria-label',
-      enabled ? 'Fondo transparente activo' : 'Fondo transparente'
+      canUseTransparency
+        ? enabled ? 'Fondo transparente activo' : 'Fondo transparente'
+        : 'Fondo transparente no disponible en JPG'
     );
-    elements.exportTransparentBgBtn.title = enabled
-      ? `Fondo transparente ${tolerance} · Protección ${protection}`
-      : 'Fondo transparente';
+    elements.exportTransparentBgBtn.title = !canUseTransparency
+      ? 'JPG no admite transparencia'
+      : enabled
+        ? `Fondo transparente ${tolerance} · Protección ${protection}`
+        : 'Fondo transparente';
   }
   const transparentControl = elements.exportTransparentBgBtn?.parentElement;
   if (transparentControl instanceof HTMLElement) {
     transparentControl.classList.toggle('active', enabled);
     transparentControl.classList.toggle('adjusting', state.exportWizardTransparentAdjusting === true);
+    transparentControl.classList.toggle('disabled', !canUseTransparency);
   }
   if (elements.exportTransparentBgPopover instanceof HTMLElement) {
     elements.exportTransparentBgPopover.setAttribute(
       'aria-hidden',
-      enabled ? 'false' : 'true'
+      enabled && canUseTransparency ? 'false' : 'true'
     );
   }
   if (elements.exportTransparentBgSlider instanceof HTMLElement) {
@@ -3864,6 +3874,7 @@ function syncExportFormatControlState() {
   } else {
     elements.exportFormatSelect.removeAttribute('title');
   }
+  updateExportTransparentBackgroundUi();
   updateExportWizardActionUi();
 }
 

@@ -2913,7 +2913,7 @@ select:disabled {
   position: absolute;
   top: 8px;
   left: 8px;
-  z-index: 4;
+  z-index: 40;
   width: 34px;
   height: 34px;
   padding: 0;
@@ -2964,6 +2964,20 @@ select:disabled {
   position: relative;
   top: 0;
   left: 0;
+}
+
+.export-crop-toolbar-btn:disabled {
+  background: rgba(241, 245, 249, 0.88);
+  border-color: rgba(203, 213, 225, 0.95);
+  color: #94a3b8;
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.export-transparent-control.disabled .export-floating-control {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .export-floating-control {
