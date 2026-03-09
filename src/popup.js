@@ -152,6 +152,7 @@ const state = {
   exportWizardRecommendationToken: 0,
   exportWizardCompressionTouched: false,
   exportWizardCropEnabled: false,
+  exportWizardCropTransitioning: false,
   exportWizardCropRect: { x: 0, y: 0, width: 1, height: 1 },
   exportWizardCropInteraction: null,
   exportWizardTransparentBackground: false,
@@ -337,6 +338,7 @@ function bindEvents() {
     elements.exportCropToggleBtn.addEventListener('click', () => {
       const shouldEnable = state.exportWizardCropEnabled !== true;
       state.exportWizardCropEnabled = shouldEnable;
+      state.exportWizardCropTransitioning = !shouldEnable;
       if (shouldEnable && isExportCropRectFull(state.exportWizardCropRect)) {
         state.exportWizardCropRect = createDefaultExportCropRect(state.exportWizardItem, state.exportWizardPreset);
       }
@@ -1390,6 +1392,20 @@ function convertExportCropPixelsToRect(rect, metrics) {
   });
 }
 
+function shouldUseExportCropStagePreview(options = {}) {
+  const cropActive = options.cropActive === true;
+  if (!cropActive) {
+    return false;
+  }
+  const preset = normalizeExportPreset(options.preset ?? state.exportWizardPreset);
+  const editOptions = {
+    ...getCurrentExportEditOptions(),
+    cropEnabled: true
+  };
+  const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
+  return editOptions.transparentBackground === true && format !== 'image/jpeg';
+}
+
 function getExportCropPointerPosition(event, metrics) {
   if (!(elements.exportCropStage instanceof HTMLElement)) {
     return { x: 0, y: 0 };
@@ -1524,6 +1540,10 @@ function resizeExportCropRectFromEdge(interaction, point) {
 
 function updateExportCropUi() {
   const cropEnabled = state.exportWizardCropEnabled === true;
+  const cropTransitioning = state.exportWizardCropTransitioning === true;
+  const cropStageActive = cropEnabled || cropTransitioning;
+  const showPreview = !cropEnabled && !cropTransitioning;
+  const useCropStagePreview = shouldUseExportCropStagePreview({ cropActive: cropStageActive });
   const rect = clampExportCropRect(state.exportWizardCropRect);
   const aspectLocked = isExportCropAspectLocked(state.exportWizardPreset);
   state.exportWizardCropRect = rect;
@@ -1534,7 +1554,7 @@ function updateExportCropUi() {
     elements.exportCropToggleBtn.title = cropEnabled ? 'Desactivar recorte' : 'Recortar';
   }
   if (elements.exportCropEditorImg instanceof HTMLImageElement) {
-    const source = String(state.exportWizardCropEditorPreviewUrl || state.exportWizardItem?.dataUrl || '').trim();
+    const source = String((useCropStagePreview ? state.exportWizardCropEditorPreviewUrl : '') || state.exportWizardItem?.dataUrl || '').trim();
     if (source) {
       if (elements.exportCropEditorImg.src !== source) {
         elements.exportCropEditorImg.src = source;
@@ -1544,11 +1564,11 @@ function updateExportCropUi() {
     }
   }
   if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
-    elements.exportWizardPreviewImg.classList.toggle('hidden', cropEnabled);
+    elements.exportWizardPreviewImg.classList.toggle('hidden', !showPreview);
   }
   if (elements.exportCropStage instanceof HTMLElement) {
-    elements.exportCropStage.classList.toggle('hidden', !cropEnabled);
-    elements.exportCropStage.setAttribute('aria-hidden', cropEnabled ? 'false' : 'true');
+    elements.exportCropStage.classList.toggle('hidden', !cropStageActive);
+    elements.exportCropStage.setAttribute('aria-hidden', cropStageActive ? 'false' : 'true');
   }
   if (elements.exportCropBox instanceof HTMLElement) {
     elements.exportCropBox.classList.toggle('hidden', !cropEnabled);
@@ -1574,7 +1594,7 @@ function updateExportCropUi() {
     }
   }
 
-  if (!cropEnabled) {
+  if (!cropStageActive) {
     return;
   }
 
@@ -3845,6 +3865,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardCompressionTouched = false;
   state.exportWizardPassthroughCompression = null;
   state.exportWizardCropEnabled = false;
+  state.exportWizardCropTransitioning = false;
   state.exportWizardCropRect = createDefaultExportCropRect(state.exportWizardItem);
   state.exportWizardCropInteraction = null;
   state.exportWizardTransparentBackground = false;
@@ -3985,6 +4006,7 @@ function closeExportWizardModal() {
   state.exportWizardCompressionTouched = false;
   state.exportWizardPassthroughCompression = null;
   state.exportWizardCropEnabled = false;
+  state.exportWizardCropTransitioning = false;
   state.exportWizardCropRect = createFullExportCropRect();
   state.exportWizardCropInteraction = null;
   state.exportWizardTransparentBackground = false;
@@ -4037,6 +4059,9 @@ async function refreshExportWizardPreview() {
     editOptions.cropEnabled === true &&
     editOptions.transparentBackground === true &&
     format !== 'image/jpeg';
+  const keepCropStagePreviewDuringTransition =
+    state.exportWizardCropTransitioning === true &&
+    shouldUseExportCropStagePreview({ cropActive: true, preset });
   const hasStableTransparentCropStagePreview =
     needsTransparentCropStagePreview &&
     String(state.exportWizardCropEditorPreviewUrl || '').trim() !== '';
@@ -4057,7 +4082,7 @@ async function refreshExportWizardPreview() {
     elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
   }
 
-  if (!needsTransparentCropStagePreview && state.exportWizardCropEditorPreviewUrl) {
+  if (!needsTransparentCropStagePreview && state.exportWizardCropEditorPreviewUrl && !keepCropStagePreviewDuringTransition) {
     setExportWizardCropEditorPreviewUrl('');
     updateExportCropUi();
   }
@@ -4177,6 +4202,14 @@ async function refreshExportWizardPreview() {
       elements.exportWizardPreviewMeta.textContent =
         `Export · ${formatLabel}${exportDimsLabel} · ${formatBytes(metaAsset.blob.size)} · ${compressionLabel}`;
     }
+    if (token === state.exportWizardPreviewToken && state.exportWizardCropTransitioning) {
+      state.exportWizardCropTransitioning = false;
+      updateExportCropUi();
+    }
+    if (!needsTransparentCropStagePreview && state.exportWizardCropEditorPreviewUrl) {
+      setExportWizardCropEditorPreviewUrl('');
+      updateExportCropUi();
+    }
     if (token === state.exportWizardPreviewToken) {
       setExportWizardPreviewLoading(false);
     }
@@ -4189,6 +4222,10 @@ async function refreshExportWizardPreview() {
     updateExportWizardActionUi();
     if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
       elements.exportWizardPreviewMeta.textContent = 'No s\'ha pogut generar la previsualitzacio';
+    }
+    if (state.exportWizardCropTransitioning) {
+      state.exportWizardCropTransitioning = false;
+      updateExportCropUi();
     }
     setExportWizardPreviewLoading(false);
   }
