@@ -2223,6 +2223,22 @@ function pickRecommendedCompression(results, format, strategy = null) {
   const sizeGainRatio = Math.min(0.9995, Math.max(0.9, Number(strategy?.sizeGainRatio) || 0.997));
   const preferredMinColors = Math.max(0, Number(strategy?.preferredMinColors) || 0);
   const hardMinColors = Math.max(0, Number(strategy?.hardMinColors) || 0);
+  const scoreEntry = (entry, thresholdOverride = threshold) => {
+    const effectiveThreshold = Math.max(1, Number(thresholdOverride) || threshold);
+    const sizeScore = entry.size / baselineSize;
+    const errorPenalty = Math.max(0, entry.error - effectiveThreshold) * 0.06;
+    const softError = (entry.error / effectiveThreshold) * 0.02;
+    const colorCount = Math.max(0, Number(entry?.colorCount) || 0);
+    const colorPenalty =
+      preferredMinColors > 0 && colorCount > 0 && colorCount < preferredMinColors
+        ? ((preferredMinColors - colorCount) / preferredMinColors) * 0.35
+        : 0;
+    const hardPenalty =
+      hardMinColors > 0 && colorCount > 0 && colorCount < hardMinColors
+        ? 0.85
+        : 0;
+    return sizeScore + errorPenalty + softError + colorPenalty + hardPenalty;
+  };
 
   const qualitySafe = valid.filter((entry) => {
     const colorCount = Math.max(0, Number(entry?.colorCount) || 0);
@@ -2238,22 +2254,31 @@ function pickRecommendedCompression(results, format, strategy = null) {
   let best = valid[0];
   let bestScore = Number.POSITIVE_INFINITY;
   for (const entry of valid) {
-    const sizeScore = entry.size / baselineSize;
-    const errorPenalty = Math.max(0, entry.error - threshold) * 0.06;
-    const softError = (entry.error / Math.max(1, threshold)) * 0.02;
-    const colorCount = Math.max(0, Number(entry?.colorCount) || 0);
-    const colorPenalty =
-      preferredMinColors > 0 && colorCount > 0 && colorCount < preferredMinColors
-        ? ((preferredMinColors - colorCount) / preferredMinColors) * 0.35
-        : 0;
-    const hardPenalty =
-      hardMinColors > 0 && colorCount > 0 && colorCount < hardMinColors
-        ? 0.85
-        : 0;
-    const score = sizeScore + errorPenalty + softError + colorPenalty + hardPenalty;
+    const score = scoreEntry(entry);
     if (score < bestScore) {
       bestScore = score;
       best = entry;
+    }
+  }
+  if (best.compression <= 0 && (format === 'image/webp' || format === 'image/jpeg')) {
+    const relaxedThreshold = threshold * 1.55;
+    const promoted = valid
+      .filter((entry) => entry.compression > 0 && entry.size <= baselineSize * 0.995 && entry.error <= relaxedThreshold)
+      .reduce((winner, entry) => {
+        const score = scoreEntry(entry, relaxedThreshold);
+        if (!winner) {
+          return { entry, score };
+        }
+        if (score < winner.score) {
+          return { entry, score };
+        }
+        if (score > winner.score) {
+          return winner;
+        }
+        return entry.compression < winner.entry.compression ? { entry, score } : winner;
+      }, null);
+    if (promoted && promoted.score <= bestScore + 0.05) {
+      return promoted.entry.compression;
     }
   }
   return best.compression;
