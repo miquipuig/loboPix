@@ -210,6 +210,9 @@
           </div>
           <div class="export-wizard-preview-wrap">
             <img id="exportWizardPreviewImg" class="export-wizard-preview-img" alt="Previsualització export" />
+            <div id="exportWizardPreviewLoading" class="export-wizard-preview-loading hidden" role="status" aria-live="polite">
+              <span class="export-wizard-preview-loading-text">Generando previsualización...</span>
+            </div>
             <button id="exportCropToggleBtn" class="export-crop-toolbar-btn" type="button" aria-label="Activar recorte" aria-pressed="false" title="Recortar">
               <i class="bi bi-crop" aria-hidden="true"></i>
             </button>
@@ -282,20 +285,8 @@
             <option value="original">Original</option>
             <option value="favicon">Favicon (ZIP multimida)</option>
           </select>
+          <label for="exportCompressionRange" class="save-as-modal-label">Compresión</label>
           <div class="export-format-compression-compact">
-            <div class="export-compression-level-row">
-              <label for="exportCompressionLevelSelect" class="save-as-modal-label">Nivel de compresión</label>
-              <select
-                id="exportCompressionLevelSelect"
-                class="save-as-modal-input export-compression-level-select"
-                aria-label="Nivel de compresión recomendado"
-              >
-                <option value="conservative">Conservador</option>
-                <option value="optimal">Óptimo</option>
-                <option value="aggressive">Agresivo</option>
-              </select>
-            </div>
-            <label for="exportCompressionRange" class="save-as-modal-label">Compresión</label>
             <div class="export-compression-row">
               <div class="export-compression-track">
                 <div class="export-compression-ticks" aria-hidden="true"></div>
@@ -304,6 +295,15 @@
               </div>
               <span id="exportCompressionValue" class="export-compression-value">72%</span>
             </div>
+            <select
+              id="exportCompressionLevelSelect"
+              class="save-as-modal-input export-compression-level-select"
+              aria-label="Nivel de compresión recomendado"
+            >
+              <option value="conservative">Óptimo</option>
+              <option value="optimal">Agresivo</option>
+              <option value="aggressive">Extremo</option>
+            </select>
           </div>
           <div class="export-wizard-actions">
             <button id="exportWizardDownloadBtn" class="export-primary-cta" type="button">

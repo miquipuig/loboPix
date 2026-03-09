@@ -2781,6 +2781,32 @@ select:disabled {
   display: block;
 }
 
+.export-wizard-preview-loading {
+  position: absolute;
+  inset: 8px;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.72);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.export-wizard-preview-loading-text {
+  padding: 8px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 700;
+  text-align: center;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
 .export-crop-toolbar-btn {
   position: absolute;
   top: 14px;
@@ -3108,35 +3134,22 @@ select:disabled {
 
 .export-format-compression-compact {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  row-gap: 6px;
-  align-items: stretch;
-}
-
-.export-compression-level-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 118px;
   gap: 8px;
   align-items: center;
 }
 
-.export-compression-level-row > label {
-  margin: 0;
-  white-space: nowrap;
+label[for="exportCompressionRange"].save-as-modal-label {
+  margin-bottom: -5px;
 }
 
 .export-compression-level-select {
+  width: 100%;
   min-height: 34px;
-  padding-right: 28px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #991b1b;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(254, 242, 242, 0.92) 100%);
-  border-color: #fecaca;
-}
-
-.export-format-compression-compact > label[for="exportCompressionRange"] {
-  margin-top: 2px;
+  align-self: center;
+  border: 1px solid #94a3b8;
+  background: #ffffff;
+  color: #0f172a;
 }
 
 .export-compression-row {
@@ -3144,6 +3157,7 @@ select:disabled {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
+  min-width: 0;
 }
 
 .export-compression-track {

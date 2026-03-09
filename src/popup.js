@@ -81,6 +81,7 @@ const elements = {
   exportWizardOptimalPngValue: document.getElementById('exportWizardOptimalPngValue'),
   exportWizardOptimalJpegValue: document.getElementById('exportWizardOptimalJpegValue'),
   exportWizardPreviewImg: document.getElementById('exportWizardPreviewImg'),
+  exportWizardPreviewLoading: document.getElementById('exportWizardPreviewLoading'),
   exportCropToggleBtn: document.getElementById('exportCropToggleBtn'),
   exportTransparentBgBtn: document.getElementById('exportTransparentBgBtn'),
   exportCropStage: document.getElementById('exportCropStage'),
@@ -1763,12 +1764,12 @@ function normalizeExportCompressionLevel(level) {
 function exportCompressionLevelLabel(level) {
   const safeLevel = normalizeExportCompressionLevel(level);
   if (safeLevel === 'optimal') {
-    return 'Óptimo';
-  }
-  if (safeLevel === 'aggressive') {
     return 'Agresivo';
   }
-  return 'Conservador';
+  if (safeLevel === 'aggressive') {
+    return 'Extremo';
+  }
+  return 'Óptimo';
 }
 
 function updateExportCompressionLevelUi() {
@@ -1785,6 +1786,13 @@ function updateExportCompressionUi() {
   if (elements.exportCompressionValue instanceof HTMLElement) {
     elements.exportCompressionValue.textContent = `${safeCompression}%`;
   }
+}
+
+function setExportWizardPreviewLoading(isLoading) {
+  if (!(elements.exportWizardPreviewLoading instanceof HTMLElement)) {
+    return;
+  }
+  elements.exportWizardPreviewLoading.classList.toggle('hidden', isLoading !== true);
 }
 
 function setExportRecommendedCompression(compression) {
@@ -2434,7 +2442,7 @@ async function refineRecommendationResults(context, format, baseCandidates, resu
   };
 }
 
-function analyzeRecommendationCanvas(canvas) {
+function analyzeRecommendationCanvas(canvas, options = {}) {
   const ctx = canvas?.getContext?.('2d');
   const width = Math.max(1, Number(canvas?.width) || 1);
   const height = Math.max(1, Number(canvas?.height) || 1);
@@ -2443,7 +2451,8 @@ function analyzeRecommendationCanvas(canvas) {
   }
 
   const imageData = ctx.getImageData(0, 0, width, height).data;
-  const step = Math.max(1, Math.ceil(Math.max(width, height) / 96));
+  const sampleDivisor = Math.max(1, Number(options.sampleDivisor) || 96);
+  const step = Math.max(1, Math.ceil(Math.max(width, height) / sampleDivisor));
   const exactColors = new Set();
   const bucketColors = new Set();
   const maxTrackedColors = 2048;
@@ -2505,6 +2514,8 @@ function analyzeRecommendationCanvas(canvas) {
   const flatRatio = flatPairs / safePairCount;
   const smoothRatio = smoothPairs / safePairCount;
   const hardRatio = hardPairs / safePairCount;
+  const edgeRatio = (smoothPairs + hardPairs) / safePairCount;
+  const hardEdgeShare = hardPairs / Math.max(1, smoothPairs + hardPairs);
 
   return {
     exactColorCount,
@@ -2512,70 +2523,122 @@ function analyzeRecommendationCanvas(canvas) {
     flatRatio,
     smoothRatio,
     hardRatio,
+    edgeRatio,
+    hardEdgeShare,
     paletteFriendly: exactColorCount <= 16 && smoothRatio < 0.12,
     gradientRisk: bucketColorCount >= 96 && smoothRatio >= 0.18 && hardRatio <= 0.5,
     hardEdgeLowColorRisk:
-      bucketColorCount <= 192 &&
-      exactColorCount <= 320 &&
-      flatRatio >= 0.38 &&
-      smoothRatio <= 0.2 &&
-      hardRatio >= 0.18,
+      bucketColorCount <= 256 &&
+      exactColorCount <= 512 &&
+      flatRatio >= 0.3 &&
+      smoothRatio <= 0.32 &&
+      hardRatio >= 0.14 &&
+      (flatRatio + hardRatio) >= 0.68,
     strongHardEdgeLowColorRisk:
-      bucketColorCount <= 128 &&
-      exactColorCount <= 128 &&
-      flatRatio >= 0.46 &&
-      smoothRatio <= 0.14 &&
-      hardRatio >= 0.22
+      bucketColorCount <= 160 &&
+      exactColorCount <= 224 &&
+      flatRatio >= 0.38 &&
+      smoothRatio <= 0.24 &&
+      hardRatio >= 0.18 &&
+      (flatRatio + hardRatio) >= 0.74,
+    webpHardEdgeRisk:
+      (
+        bucketColorCount <= 420 &&
+        exactColorCount <= 960 &&
+        flatRatio >= 0.22 &&
+        smoothRatio <= 0.42 &&
+        hardRatio >= 0.08 &&
+        (flatRatio + hardRatio) >= 0.56
+      ) ||
+      (
+        bucketColorCount <= 960 &&
+        exactColorCount <= 1800 &&
+        flatRatio >= 0.68 &&
+        edgeRatio >= 0.025 &&
+        edgeRatio <= 0.24 &&
+        hardEdgeShare >= 0.16
+      ),
+    webpStrongHardEdgeRisk:
+      (
+        bucketColorCount <= 280 &&
+        exactColorCount <= 640 &&
+        flatRatio >= 0.28 &&
+        smoothRatio <= 0.34 &&
+        hardRatio >= 0.11 &&
+        (flatRatio + hardRatio) >= 0.62
+      ) ||
+      (
+        bucketColorCount <= 640 &&
+        exactColorCount <= 1280 &&
+        flatRatio >= 0.76 &&
+        edgeRatio >= 0.03 &&
+        edgeRatio <= 0.18 &&
+        hardEdgeShare >= 0.22
+      )
   };
 }
 
 function analyzePngRecommendationCanvas(canvas) {
-  return analyzeRecommendationCanvas(canvas);
+  return analyzeRecommendationCanvas(canvas, { sampleDivisor: 96 });
 }
 
 function resolvePngRecommendationStrategy(analysis) {
   const base = {
-    maxCompression: 100,
-    thresholdScale: 1,
-    sizeGainRatio: 0.997,
+    maxCompression: 88,
+    thresholdScale: 0.86,
+    sizeGainRatio: 0.995,
     preferredMinColors: 0,
     hardMinColors: 0
   };
   if (!analysis) {
     return base;
   }
+  const exactColorCount = Math.max(0, Number(analysis.exactColorCount) || 0);
+  const bucketColorCount = Math.max(0, Number(analysis.bucketColorCount) || 0);
+  const preferredLowColorFloor = exactColorCount > 0
+    ? Math.max(8, Math.min(160, Math.round(exactColorCount * 0.9)))
+    : 0;
+  const hardLowColorFloor = exactColorCount > 0
+    ? Math.max(4, Math.min(128, Math.round(exactColorCount * 0.72)))
+    : 0;
   if (analysis.paletteFriendly) {
     return {
       ...base,
-      thresholdScale: 1.3,
-      sizeGainRatio: 0.999
+      maxCompression: 64,
+      thresholdScale: 0.82,
+      sizeGainRatio: 0.997,
+      preferredMinColors: preferredLowColorFloor,
+      hardMinColors: hardLowColorFloor
     };
   }
   if (analysis.gradientRisk) {
     return {
       ...base,
+      maxCompression: 60,
+      thresholdScale: 0.34,
+      sizeGainRatio: 0.99,
+      preferredMinColors: 128,
+      hardMinColors: 96
+    };
+  }
+  if (bucketColorCount >= 160) {
+    return {
+      ...base,
       maxCompression: 72,
-      thresholdScale: 0.42,
-      sizeGainRatio: 0.992,
+      thresholdScale: 0.52,
+      sizeGainRatio: 0.993,
       preferredMinColors: 96,
-      hardMinColors: 64
+      hardMinColors: 48
     };
   }
-  if (analysis.bucketColorCount >= 160) {
+  if (exactColorCount > 0 && exactColorCount <= 32) {
     return {
       ...base,
-      maxCompression: 80,
-      thresholdScale: 0.62,
-      sizeGainRatio: 0.994,
-      preferredMinColors: 64,
-      hardMinColors: 32
-    };
-  }
-  if (analysis.exactColorCount <= 32) {
-    return {
-      ...base,
-      thresholdScale: 1.15,
-      sizeGainRatio: 0.998
+      maxCompression: 56,
+      thresholdScale: 0.78,
+      sizeGainRatio: 0.997,
+      preferredMinColors: Math.max(preferredLowColorFloor, exactColorCount),
+      hardMinColors: Math.max(hardLowColorFloor, Math.round(exactColorCount * 0.82))
     };
   }
   return base;
@@ -2583,6 +2646,7 @@ function resolvePngRecommendationStrategy(analysis) {
 
 function resolveLossyRecommendationStrategy(analysis, format) {
   const safeFormat = normalizeExportFormat(format);
+  const isWebp = safeFormat === 'image/webp';
   const base = {
     maxCompression: 100,
     thresholdScale: 1,
@@ -2603,24 +2667,71 @@ function resolveLossyRecommendationStrategy(analysis, format) {
     return base;
   }
 
+  if (isWebp && analysis.webpStrongHardEdgeRisk) {
+    return {
+      ...base,
+      maxCompression: 16,
+      thresholdScale: 0.2,
+      sizeGainRatio: 0.99,
+      compressionBiasScale: 0.04,
+      promotionThresholdMultiplierScale: 0.12,
+      promotionMarginScale: 0.14,
+      aggressiveUpgradeSizeRatioScale: 0.76,
+      aggressiveUpgradeErrorMultiplierScale: 0.42,
+      preferHigherCompressionOnTie: false,
+      forcePositiveLossyRecommendation: false,
+      refinementRadius: 2,
+      refinementMidpointRadius: 2,
+      profileThresholdScales: {
+        conservative: 0.42,
+        optimal: 0.5,
+        aggressive: 0.62
+      }
+    };
+  }
+
+  if (isWebp && analysis.webpHardEdgeRisk) {
+    return {
+      ...base,
+      maxCompression: 22,
+      thresholdScale: 0.28,
+      sizeGainRatio: 0.991,
+      compressionBiasScale: 0.08,
+      promotionThresholdMultiplierScale: 0.18,
+      promotionMarginScale: 0.2,
+      aggressiveUpgradeSizeRatioScale: 0.8,
+      aggressiveUpgradeErrorMultiplierScale: 0.5,
+      preferHigherCompressionOnTie: false,
+      forcePositiveLossyRecommendation: false,
+      refinementRadius: 3,
+      refinementMidpointRadius: 2,
+      profileThresholdScales: {
+        conservative: 0.5,
+        optimal: 0.58,
+        aggressive: 0.7
+      }
+    };
+  }
+
   if (analysis.strongHardEdgeLowColorRisk) {
     return {
       ...base,
-      maxCompression: safeFormat === 'image/jpeg' ? 62 : 68,
-      thresholdScale: 0.62,
-      compressionBiasScale: 0.46,
-      promotionThresholdMultiplierScale: 0.58,
-      promotionMarginScale: 0.6,
-      aggressiveUpgradeSizeRatioScale: 1.06,
-      aggressiveUpgradeErrorMultiplierScale: 0.82,
+      maxCompression: safeFormat === 'image/jpeg' ? 46 : 36,
+      thresholdScale: isWebp ? 0.34 : 0.48,
+      sizeGainRatio: 0.992,
+      compressionBiasScale: isWebp ? 0.14 : 0.28,
+      promotionThresholdMultiplierScale: isWebp ? 0.24 : 0.42,
+      promotionMarginScale: isWebp ? 0.28 : 0.45,
+      aggressiveUpgradeSizeRatioScale: isWebp ? 0.84 : 0.9,
+      aggressiveUpgradeErrorMultiplierScale: isWebp ? 0.58 : 0.72,
       preferHigherCompressionOnTie: false,
       forcePositiveLossyRecommendation: false,
-      refinementRadius: 8,
+      refinementRadius: isWebp ? 4 : 6,
       refinementMidpointRadius: 4,
       profileThresholdScales: {
-        conservative: 0.8,
-        optimal: 0.88,
-        aggressive: 0.96
+        conservative: isWebp ? 0.58 : 0.72,
+        optimal: isWebp ? 0.66 : 0.8,
+        aggressive: isWebp ? 0.78 : 0.9
       }
     };
   }
@@ -2628,20 +2739,22 @@ function resolveLossyRecommendationStrategy(analysis, format) {
   if (analysis.hardEdgeLowColorRisk) {
     return {
       ...base,
-      maxCompression: safeFormat === 'image/jpeg' ? 72 : 78,
-      thresholdScale: 0.78,
-      compressionBiasScale: 0.66,
-      promotionThresholdMultiplierScale: 0.76,
-      promotionMarginScale: 0.78,
-      aggressiveUpgradeSizeRatioScale: 1.03,
-      aggressiveUpgradeErrorMultiplierScale: 0.92,
+      maxCompression: safeFormat === 'image/jpeg' ? 60 : 48,
+      thresholdScale: isWebp ? 0.46 : 0.64,
+      sizeGainRatio: 0.994,
+      compressionBiasScale: isWebp ? 0.26 : 0.48,
+      promotionThresholdMultiplierScale: isWebp ? 0.38 : 0.58,
+      promotionMarginScale: isWebp ? 0.44 : 0.62,
+      aggressiveUpgradeSizeRatioScale: isWebp ? 0.88 : 0.95,
+      aggressiveUpgradeErrorMultiplierScale: isWebp ? 0.66 : 0.82,
       preferHigherCompressionOnTie: false,
-      refinementRadius: 10,
-      refinementMidpointRadius: 5,
+      forcePositiveLossyRecommendation: false,
+      refinementRadius: isWebp ? 6 : 8,
+      refinementMidpointRadius: 4,
       profileThresholdScales: {
-        conservative: 0.88,
-        optimal: 0.94,
-        aggressive: 0.98
+        conservative: isWebp ? 0.68 : 0.8,
+        optimal: isWebp ? 0.76 : 0.88,
+        aggressive: isWebp ? 0.86 : 0.94
       }
     };
   }
@@ -3328,7 +3441,7 @@ async function estimateRecommendedWebpCompressionResultForItem(item, options = {
   if (context?.fallbackResult) {
     return context.fallbackResult;
   }
-  const lossyAnalysis = analyzeRecommendationCanvas(context.canvas);
+  const lossyAnalysis = analyzeRecommendationCanvas(context.canvas, { sampleDivisor: 192 });
   const lossyStrategy = resolveLossyRecommendationStrategy(lossyAnalysis, 'image/webp');
   const coarseCandidates = EXPORT_RECOMMENDATION_CANDIDATES.filter(
     (candidate) => normalizeExportCompression(candidate) <= (lossyStrategy?.maxCompression ?? 100)
@@ -3349,7 +3462,7 @@ async function estimateRecommendedJpegCompressionResultForItem(item, options = {
   if (context?.fallbackResult) {
     return context.fallbackResult;
   }
-  const lossyAnalysis = analyzeRecommendationCanvas(context.canvas);
+  const lossyAnalysis = analyzeRecommendationCanvas(context.canvas, { sampleDivisor: 192 });
   const lossyStrategy = resolveLossyRecommendationStrategy(lossyAnalysis, 'image/jpeg');
   const coarseCandidates = EXPORT_RECOMMENDATION_CANDIDATES.filter(
     (candidate) => normalizeExportCompression(candidate) <= (lossyStrategy?.maxCompression ?? 100)
@@ -3531,7 +3644,7 @@ function computePerceptualPixelError(referencePixels, comparedPixels, width, hei
     (ssimPenalty * 1.35) +
     (lumaRmse / 4.5) +
     (gradientRmse / 5.5) +
-    (strongEdgeRmse / 4.1) +
+    (strongEdgeRmse / 3.3) +
     (chromaRmse / 9) +
     (alphaRmse / 8)
   );
@@ -3746,6 +3859,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
   if (elements.exportWizardPreviewImg instanceof HTMLImageElement) {
     elements.exportWizardPreviewImg.removeAttribute('src');
   }
+  setExportWizardPreviewLoading(true);
 
   closeSaveAsModal();
   closeManualUploadModal();
@@ -3838,6 +3952,7 @@ function closeExportWizardModal() {
   state.exportWizardTransparentPointerId = null;
   state.exportWizardEstimatedOutputBytes = 0;
   state.exportWizardBusy = false;
+  setExportWizardPreviewLoading(false);
   setExportRecommendedCompression(null);
   setExportPassthroughCompression(null);
   updateExportCompressionLevelUi();
@@ -3864,6 +3979,7 @@ async function refreshExportWizardPreview() {
 
   const token = state.exportWizardPreviewToken + 1;
   state.exportWizardPreviewToken = token;
+  setExportWizardPreviewLoading(true);
   if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
     elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
   }
@@ -3975,6 +4091,9 @@ async function refreshExportWizardPreview() {
       elements.exportWizardPreviewMeta.textContent =
         `Export · ${formatLabel}${exportDimsLabel} · ${formatBytes(metaAsset.blob.size)} · ${compressionLabel}`;
     }
+    if (token === state.exportWizardPreviewToken) {
+      setExportWizardPreviewLoading(false);
+    }
   } catch (error) {
     if (token !== state.exportWizardPreviewToken) {
       return;
@@ -3985,6 +4104,7 @@ async function refreshExportWizardPreview() {
     if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
       elements.exportWizardPreviewMeta.textContent = 'No s\'ha pogut generar la previsualitzacio';
     }
+    setExportWizardPreviewLoading(false);
   }
 }
 
