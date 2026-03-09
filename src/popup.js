@@ -8,6 +8,7 @@ const VIEW_WEB = 'web';
 const VIEW_LIBRARY = 'library';
 const STORAGE_KEY_MANUAL_LIBRARY = 'manualImageLibrary';
 const STORAGE_KEY_DOMAIN_GALLERIES = 'domainImageGalleries';
+const STORAGE_KEY_LAST_WORK_PAGE = 'lastWorkPage';
 const MAX_MANUAL_IMAGES = 80;
 const MANUAL_GALLERY_ID = 'manual-gallery';
 const EXPORT_PRESET_ORIGINAL = 'original';
@@ -125,6 +126,7 @@ const elements = {
 
 const state = {
   activePage: 'url',
+  preferredWorkPage: 'url',
   galleryView: VIEW_WEB,
   activeTabId: null,
   activeTabUrl: '',
@@ -188,7 +190,16 @@ async function init() {
   renderVersion();
   await loadManualLibrary();
   await loadDomainGalleries();
+  state.preferredWorkPage = await loadPreferredWorkPage();
   await resolveActiveTabContext();
+  if (state.preferredWorkPage === 'library') {
+    state.galleryView = VIEW_LIBRARY;
+    state.galleryListMode = 'list';
+    state.activeGalleryId = '';
+    setActivePage('library');
+    return;
+  }
+  state.galleryView = VIEW_WEB;
   setActivePage('url');
   await loadWebGallery();
 }
@@ -842,6 +853,9 @@ function bindEvents() {
 function setActivePage(page) {
   const safe = page === 'user' || page === 'about' || page === 'library' ? page : 'url';
   state.activePage = safe;
+  if (safe === 'url' || safe === 'library') {
+    void persistPreferredWorkPage(safe);
+  }
   if (safe !== 'url') {
     closeSaveAsModal();
     closeManualUploadModal();
@@ -876,6 +890,35 @@ function setNavButtonState(button, active) {
   }
   button.classList.toggle('active', active);
   button.setAttribute('aria-pressed', active ? 'true' : 'false');
+}
+
+function normalizePreferredWorkPage(page) {
+  return page === 'library' ? 'library' : 'url';
+}
+
+async function loadPreferredWorkPage() {
+  try {
+    const stored = await chrome.storage.local.get({ [STORAGE_KEY_LAST_WORK_PAGE]: 'url' });
+    return normalizePreferredWorkPage(stored[STORAGE_KEY_LAST_WORK_PAGE]);
+  } catch (error) {
+    console.error('Preferred work page load failed', error);
+    return 'url';
+  }
+}
+
+async function persistPreferredWorkPage(page) {
+  const safePage = normalizePreferredWorkPage(page);
+  if (state.preferredWorkPage === safePage) {
+    return;
+  }
+  state.preferredWorkPage = safePage;
+  try {
+    await chrome.storage.local.set({
+      [STORAGE_KEY_LAST_WORK_PAGE]: safePage
+    });
+  } catch (error) {
+    console.error('Preferred work page save failed', error);
+  }
 }
 
 function openLibraryPageWhenWebGalleryUnavailable() {
