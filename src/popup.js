@@ -38,6 +38,11 @@ const EXPORT_RECOMMENDATION_ERROR_THRESHOLD = {
 const exportCompressionRecommendationCache = new Map();
 const exportFormatRecommendationCache = new Map();
 const exportFormatAnalysisCache = new Map();
+const exportWasmEncoderAvailability = {
+  jpeg: 'unknown',
+  webp: 'unknown',
+  oxipng: 'unknown'
+};
 
 const elements = {
   popupRoot: document.getElementById('popupRoot'),
@@ -166,6 +171,8 @@ const state = {
   exportWizardCropEditorPreviewUrl: '',
   exportWizardPreviewToken: 0,
   exportWizardPreviewLoadingTimeout: null,
+  exportWizardRecommendationTimeout: null,
+  exportWizardPendingRecommendationOptions: null,
   exportWizardBusy: false,
   toastTimer: null,
   fileDragDepth: 0,
@@ -344,7 +351,9 @@ function bindEvents() {
       }
       updateExportCropUi();
       void refreshExportWizardPreview();
-      void refreshExportFormatAndCompressionRecommendations();
+      refreshExportFormatAndCompressionRecommendations({
+        delayMs: shouldEnable ? 320 : 80
+      });
     });
   }
 
@@ -1397,13 +1406,7 @@ function shouldUseExportCropStagePreview(options = {}) {
   if (!cropActive) {
     return false;
   }
-  const preset = normalizeExportPreset(options.preset ?? state.exportWizardPreset);
-  const editOptions = {
-    ...getCurrentExportEditOptions(),
-    cropEnabled: true
-  };
-  const format = resolveEffectiveExportFormat(state.exportWizardFormat, preset, editOptions);
-  return editOptions.transparentBackground === true && format !== 'image/jpeg';
+  return state.exportWizardItem?.dataUrl ? true : false;
 }
 
 function getExportCropPointerPosition(event, metrics) {
@@ -1854,6 +1857,55 @@ function setExportWizardCropEditorPreviewUrl(nextUrl) {
     URL.revokeObjectURL(state.exportWizardCropEditorPreviewUrl);
   }
   state.exportWizardCropEditorPreviewUrl = safeNextUrl;
+}
+
+function clearExportWizardRecommendationSchedule() {
+  if (state.exportWizardRecommendationTimeout !== null) {
+    window.clearTimeout(state.exportWizardRecommendationTimeout);
+    state.exportWizardRecommendationTimeout = null;
+  }
+}
+
+function cancelExportRecommendationWork() {
+  state.exportWizardFormatRecommendationToken += 1;
+  state.exportWizardFormatAnalysisToken += 1;
+  state.exportWizardInitialFormatAnalysisToken += 1;
+  state.exportWizardRecommendationToken += 1;
+}
+
+function mergeExportRecommendationRefreshOptions(baseOptions = {}, nextOptions = {}) {
+  const base = baseOptions && typeof baseOptions === 'object' ? baseOptions : {};
+  const next = nextOptions && typeof nextOptions === 'object' ? nextOptions : {};
+  return {
+    forceFormat: base.forceFormat === true || next.forceFormat === true,
+    forceInitialAnalysis: base.forceInitialAnalysis === true || next.forceInitialAnalysis === true,
+    forceAnalysis: base.forceAnalysis === true || next.forceAnalysis === true,
+    immediate: base.immediate === true || next.immediate === true,
+    allowDuringInteraction: base.allowDuringInteraction === true || next.allowDuringInteraction === true,
+    delayMs:
+      Number.isFinite(Number(next.delayMs))
+        ? Math.max(0, Math.round(Number(next.delayMs)))
+        : Number.isFinite(Number(base.delayMs))
+          ? Math.max(0, Math.round(Number(base.delayMs)))
+          : null
+  };
+}
+
+function resolveExportRecommendationRefreshDelay(options = {}) {
+  if (options.immediate === true) {
+    return 0;
+  }
+  if (Number.isFinite(Number(options.delayMs))) {
+    return Math.max(0, Math.round(Number(options.delayMs)));
+  }
+  return 80;
+}
+
+function shouldDeferExportRecommendationRefresh(options = {}) {
+  return (
+    options.allowDuringInteraction !== true &&
+    (state.exportWizardCropInteraction !== null || state.exportWizardTransparentAdjusting === true)
+  );
 }
 
 function setExportRecommendedCompression(compression) {
@@ -2504,7 +2556,7 @@ async function refineRecommendationResults(context, format, baseCandidates, resu
 }
 
 function analyzeRecommendationCanvas(canvas, options = {}) {
-  const ctx = canvas?.getContext?.('2d');
+  const ctx = getCanvas2dContext(canvas, { willReadFrequently: true });
   const width = Math.max(1, Number(canvas?.width) || 1);
   const height = Math.max(1, Number(canvas?.height) || 1);
   if (!ctx) {
@@ -3269,7 +3321,39 @@ async function autoSelectBestFormatForCurrentExport(options = {}) {
   }
 }
 
-async function refreshExportFormatAndCompressionRecommendations(options = {}) {
+function refreshExportFormatAndCompressionRecommendations(options = {}) {
+  const mergedOptions = mergeExportRecommendationRefreshOptions(state.exportWizardPendingRecommendationOptions, options);
+  state.exportWizardPendingRecommendationOptions = mergedOptions;
+  clearExportWizardRecommendationSchedule();
+  cancelExportRecommendationWork();
+
+  const runScheduledRefresh = () => {
+    state.exportWizardRecommendationTimeout = null;
+    if (!state.exportWizardItem?.dataUrl) {
+      state.exportWizardPendingRecommendationOptions = null;
+      setExportRecommendedCompression(null);
+      setExportPassthroughCompression(null);
+      updateExportOptimalSummaryUi();
+      return;
+    }
+    if (shouldDeferExportRecommendationRefresh(mergedOptions)) {
+      state.exportWizardRecommendationTimeout = window.setTimeout(runScheduledRefresh, 120);
+      return;
+    }
+    const pendingOptions = state.exportWizardPendingRecommendationOptions || mergedOptions;
+    state.exportWizardPendingRecommendationOptions = null;
+    void runExportFormatAndCompressionRecommendations(pendingOptions);
+  };
+
+  const delayMs = resolveExportRecommendationRefreshDelay(mergedOptions);
+  if (delayMs <= 0) {
+    runScheduledRefresh();
+    return;
+  }
+  state.exportWizardRecommendationTimeout = window.setTimeout(runScheduledRefresh, delayMs);
+}
+
+async function runExportFormatAndCompressionRecommendations(options = {}) {
   if (!state.exportWizardItem?.dataUrl) {
     setExportRecommendedCompression(null);
     setExportPassthroughCompression(null);
@@ -3320,7 +3404,7 @@ async function buildExportRecommendationContext(item, options = {}, forcedFormat
     maxEdge: EXPORT_RECOMMENDATION_MAX_EDGE,
     ...editOptions
   });
-  const ctx = canvas.getContext('2d');
+  const ctx = getCanvas2dContext(canvas, { willReadFrequently: true });
   if (!ctx) {
     return {
       fallbackResult: {
@@ -3723,7 +3807,7 @@ async function computeBlobVisualMse(blob, referencePixels, width, height) {
     const canvas = document.createElement('canvas');
     canvas.width = safeWidth;
     canvas.height = safeHeight;
-    const ctx = canvas.getContext('2d');
+    const ctx = getCanvas2dContext(canvas, { willReadFrequently: true });
     if (!ctx) {
       return Number.POSITIVE_INFINITY;
     }
@@ -3884,6 +3968,8 @@ function openExportWizardFromImageId(imageId, options = {}) {
   state.exportWizardInitialFormatAnalyses = {};
   state.exportWizardRecommendationToken += 1;
   state.exportWizardBusy = false;
+  clearExportWizardRecommendationSchedule();
+  state.exportWizardPendingRecommendationOptions = null;
 
   if (elements.exportFormatSelect instanceof HTMLSelectElement) {
     elements.exportFormatSelect.value = state.exportWizardFormat;
@@ -3939,7 +4025,7 @@ function openExportWizardFromImageId(imageId, options = {}) {
     });
   }
   void refreshExportWizardPreview();
-  void refreshExportFormatAndCompressionRecommendations({ forceFormat: true });
+  refreshExportFormatAndCompressionRecommendations({ forceFormat: true, immediate: true });
 }
 
 function findExportSourceItem(imageId, options = {}) {
@@ -4017,6 +4103,8 @@ function closeExportWizardModal() {
   state.exportWizardTransparentPointerId = null;
   state.exportWizardEstimatedOutputBytes = 0;
   state.exportWizardBusy = false;
+  clearExportWizardRecommendationSchedule();
+  state.exportWizardPendingRecommendationOptions = null;
   setExportWizardPreviewLoading(false);
   setExportRecommendedCompression(null);
   setExportPassthroughCompression(null);
@@ -4055,18 +4143,19 @@ async function refreshExportWizardPreview() {
     preset === EXPORT_PRESET_FAVICON ? resolveFaviconMaxSourceSize(state.exportWizardItem, editOptions) : 0;
   const imagePreviewSize = preset === EXPORT_PRESET_FAVICON ? 0 : exportPreviewSize;
   const quality = resolveExportQuality(format, preset, state.exportWizardCompression);
-  const needsTransparentCropStagePreview =
-    editOptions.cropEnabled === true &&
-    editOptions.transparentBackground === true &&
-    format !== 'image/jpeg';
+  const needsCropStagePreview = shouldUseExportCropStagePreview({
+    cropActive: editOptions.cropEnabled === true,
+    preset
+  });
   const keepCropStagePreviewDuringTransition =
     state.exportWizardCropTransitioning === true &&
     shouldUseExportCropStagePreview({ cropActive: true, preset });
-  const hasStableTransparentCropStagePreview =
-    needsTransparentCropStagePreview &&
+  const needsVisibleCropStagePreview = needsCropStagePreview || keepCropStagePreviewDuringTransition;
+  const hasStableCropStagePreview =
+    needsVisibleCropStagePreview &&
     String(state.exportWizardCropEditorPreviewUrl || '').trim() !== '';
 
-  if (hasStableTransparentCropStagePreview) {
+  if (hasStableCropStagePreview) {
     setExportWizardPreviewLoading(false);
   } else {
     setExportWizardPreviewLoading(true, {
@@ -4077,12 +4166,12 @@ async function refreshExportWizardPreview() {
   if (
     elements.exportWizardPreviewMeta instanceof HTMLElement &&
     !state.exportWizardPreviewUrl &&
-    !hasStableTransparentCropStagePreview
+    !hasStableCropStagePreview
   ) {
     elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
   }
 
-  if (!needsTransparentCropStagePreview && state.exportWizardCropEditorPreviewUrl && !keepCropStagePreviewDuringTransition) {
+  if (!needsVisibleCropStagePreview && state.exportWizardCropEditorPreviewUrl) {
     setExportWizardCropEditorPreviewUrl('');
     updateExportCropUi();
   }
@@ -4101,7 +4190,7 @@ async function refreshExportWizardPreview() {
       return;
     }
 
-    if (needsTransparentCropStagePreview) {
+    if (needsVisibleCropStagePreview) {
       const cropStageAsset = await renderImageExportAsset(state.exportWizardItem.dataUrl, {
         format,
         preset,
@@ -4206,7 +4295,7 @@ async function refreshExportWizardPreview() {
       state.exportWizardCropTransitioning = false;
       updateExportCropUi();
     }
-    if (!needsTransparentCropStagePreview && state.exportWizardCropEditorPreviewUrl) {
+    if (!needsVisibleCropStagePreview && state.exportWizardCropEditorPreviewUrl) {
       setExportWizardCropEditorPreviewUrl('');
       updateExportCropUi();
     }
@@ -4440,10 +4529,23 @@ function canvasToBlobAsync(canvas, format, quality) {
   });
 }
 
+function getCanvas2dContext(canvas, options = {}) {
+  if (
+    !(canvas instanceof HTMLCanvasElement) &&
+    (typeof OffscreenCanvas === 'undefined' || !(canvas instanceof OffscreenCanvas))
+  ) {
+    return null;
+  }
+  return canvas.getContext(
+    '2d',
+    options.willReadFrequently === true ? { willReadFrequently: true } : undefined
+  );
+}
+
 function getCanvasImageData(canvas) {
   const width = Math.max(1, Number(canvas?.width) || 1);
   const height = Math.max(1, Number(canvas?.height) || 1);
-  const ctx = canvas?.getContext?.('2d');
+  const ctx = getCanvas2dContext(canvas, { willReadFrequently: true });
   if (!ctx) {
     throw new Error('canvas_context_unavailable');
   }
@@ -4524,6 +4626,24 @@ async function encodeOptimizedPngFromCanvas(canvas, compression) {
   return new Blob([optimized], { type: 'image/png' });
 }
 
+function isExportWasmPolicyError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return (
+    message.includes('content security policy') ||
+    message.includes('wasm-eval') ||
+    message.includes('wasm-unsafe-eval') ||
+    message.includes('unsafe-eval')
+  );
+}
+
+function handleExportWasmEncoderFailure(key, label, error) {
+  if (isExportWasmPolicyError(error)) {
+    exportWasmEncoderAvailability[key] = 'unavailable';
+    return;
+  }
+  console.error(`${label} encode failed, fallback to canvas encoder`, error);
+}
+
 function buildExportCanvasFromImage(image, options = {}) {
   const format = normalizeExportFormat(options.format || EXPORT_DEFAULT_FORMAT);
   const targetSize = Math.max(0, Math.round(Number(options.targetSize) || 0));
@@ -4550,7 +4670,7 @@ function buildExportCanvasFromImage(image, options = {}) {
   const sourceCanvas = document.createElement('canvas');
   sourceCanvas.width = cropWidth;
   sourceCanvas.height = cropHeight;
-  const sourceCtx = sourceCanvas.getContext('2d');
+  const sourceCtx = getCanvas2dContext(sourceCanvas, { willReadFrequently: true });
   if (!sourceCtx) {
     throw new Error('canvas_context_unavailable');
   }
@@ -4583,7 +4703,7 @@ function buildExportCanvasFromImage(image, options = {}) {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext('2d');
+  const ctx = getCanvas2dContext(canvas, { willReadFrequently: true });
   if (!ctx) {
     throw new Error('canvas_context_unavailable');
   }
@@ -4613,7 +4733,7 @@ function buildExportCanvasFromImage(image, options = {}) {
 function removeBackgroundFromCanvas(canvas, options = {}) {
   const width = Math.max(1, Number(canvas?.width) || 1);
   const height = Math.max(1, Number(canvas?.height) || 1);
-  const ctx = canvas.getContext('2d');
+  const ctx = getCanvas2dContext(canvas, { willReadFrequently: true });
   if (!ctx) {
     throw new Error('canvas_context_unavailable');
   }
@@ -4909,31 +5029,37 @@ async function encodeCanvasToExportBlob(canvas, options = {}) {
     : undefined;
   const pngCompression = normalizeExportCompression(options.pngCompression);
   if (format === 'image/jpeg') {
-    try {
-      return await encodeJpegFromCanvas(canvas, quality);
-    } catch (error) {
-      console.error('MozJPEG encode failed, fallback to canvas encoder', error);
-      return canvasToBlobAsync(canvas, format, quality);
+    if (exportWasmEncoderAvailability.jpeg !== 'unavailable') {
+      try {
+        return await encodeJpegFromCanvas(canvas, quality);
+      } catch (error) {
+        handleExportWasmEncoderFailure('jpeg', 'MozJPEG', error);
+      }
     }
+    return canvasToBlobAsync(canvas, format, quality);
   }
   if (format === 'image/webp') {
-    try {
-      return await encodeWebpFromCanvas(canvas, quality);
-    } catch (error) {
-      console.error('WebP encode failed, fallback to canvas encoder', error);
-      return canvasToBlobAsync(canvas, format, quality);
+    if (exportWasmEncoderAvailability.webp !== 'unavailable') {
+      try {
+        return await encodeWebpFromCanvas(canvas, quality);
+      } catch (error) {
+        handleExportWasmEncoderFailure('webp', 'WebP', error);
+      }
     }
+    return canvasToBlobAsync(canvas, format, quality);
   }
   if (format === 'image/png') {
     if (pngCompression > 0) {
       return encodeQuantizedPngFromCanvas(canvas, pngCompression);
     }
-    try {
-      return await encodeOptimizedPngFromCanvas(canvas, pngCompression);
-    } catch (error) {
-      console.error('OXIPNG encode failed, fallback to canvas encoder', error);
-      return canvasToBlobAsync(canvas, 'image/png');
+    if (exportWasmEncoderAvailability.oxipng !== 'unavailable') {
+      try {
+        return await encodeOptimizedPngFromCanvas(canvas, pngCompression);
+      } catch (error) {
+        handleExportWasmEncoderFailure('oxipng', 'OXIPNG', error);
+      }
     }
+    return canvasToBlobAsync(canvas, 'image/png');
   }
   return canvasToBlobAsync(canvas, format, quality);
 }
@@ -4941,7 +5067,7 @@ async function encodeCanvasToExportBlob(canvas, options = {}) {
 async function encodeQuantizedPngFromCanvas(canvas, compression) {
   const width = Math.max(1, Number(canvas.width) || 1);
   const height = Math.max(1, Number(canvas.height) || 1);
-  const ctx = canvas.getContext('2d');
+  const ctx = getCanvas2dContext(canvas, { willReadFrequently: true });
   if (!ctx) {
     throw new Error('canvas_context_unavailable');
   }
@@ -4949,29 +5075,35 @@ async function encodeQuantizedPngFromCanvas(canvas, compression) {
   const rgba = new Uint8Array(imageData.data);
   const colorCount = resolvePngColorCountFromCompression(compression);
   if (colorCount <= 0) {
-    try {
-      return await encodeOptimizedPngFromCanvas(canvas, compression);
-    } catch (error) {
-      console.error('OXIPNG encode failed, fallback to canvas PNG', error);
-      return canvasToBlobAsync(canvas, 'image/png');
+    if (exportWasmEncoderAvailability.oxipng !== 'unavailable') {
+      try {
+        return await encodeOptimizedPngFromCanvas(canvas, compression);
+      } catch (error) {
+        handleExportWasmEncoderFailure('oxipng', 'OXIPNG', error);
+      }
     }
+    return canvasToBlobAsync(canvas, 'image/png');
   }
   try {
     const encoded = UPNG.encode([rgba.buffer], width, height, colorCount);
-    try {
-      return await optimizePngArrayBuffer(encoded, compression);
-    } catch (optimizationError) {
-      console.error('OXIPNG optimise failed after quantization, fallback to raw quantized PNG', optimizationError);
-      return new Blob([encoded], { type: 'image/png' });
+    if (exportWasmEncoderAvailability.oxipng !== 'unavailable') {
+      try {
+        return await optimizePngArrayBuffer(encoded, compression);
+      } catch (optimizationError) {
+        handleExportWasmEncoderFailure('oxipng', 'OXIPNG', optimizationError);
+      }
     }
+    return new Blob([encoded], { type: 'image/png' });
   } catch (error) {
     console.error('UPNG quantization failed, fallback to canvas PNG', error);
-    try {
-      return await encodeOptimizedPngFromCanvas(canvas, compression);
-    } catch (optimizationError) {
-      console.error('OXIPNG encode failed, fallback to canvas PNG', optimizationError);
-      return canvasToBlobAsync(canvas, 'image/png');
+    if (exportWasmEncoderAvailability.oxipng !== 'unavailable') {
+      try {
+        return await encodeOptimizedPngFromCanvas(canvas, compression);
+      } catch (optimizationError) {
+        handleExportWasmEncoderFailure('oxipng', 'OXIPNG', optimizationError);
+      }
     }
+    return canvasToBlobAsync(canvas, 'image/png');
   }
 }
 

@@ -2878,6 +2878,11 @@ select:disabled {
   display: block;
 }
 
+.export-wizard-preview-img:not([src]),
+.export-crop-editor-img:not([src]) {
+  display: none;
+}
+
 .export-wizard-preview-loading {
   position: absolute;
   inset: var(--export-preview-inset);
