@@ -4006,7 +4006,7 @@ async function refreshExportWizardPreview() {
     delayMs: state.exportWizardPreviewUrl ? 220 : 120,
     token
   });
-  if (elements.exportWizardPreviewMeta instanceof HTMLElement) {
+  if (elements.exportWizardPreviewMeta instanceof HTMLElement && !state.exportWizardPreviewUrl) {
     elements.exportWizardPreviewMeta.textContent = 'Previsualitzant...';
   }
   const passthroughCompression = state.exportWizardPassthroughCompression;
