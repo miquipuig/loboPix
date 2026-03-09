@@ -2755,6 +2755,10 @@ select:disabled {
 .export-wizard-card {
   width: min(100%, 430px);
   max-height: calc(100% - 2px);
+  gap: 6px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  overflow-x: hidden;
 }
 
 .export-optimal-summary {
@@ -2849,11 +2853,12 @@ select:disabled {
 }
 
 .export-wizard-preview-wrap {
+  --export-preview-inset: 0px;
   position: relative;
   width: 100%;
-  min-height: 110px;
-  height: clamp(110px, 23vh, 150px);
-  padding: 8px;
+  min-height: 146px;
+  height: clamp(146px, 28vh, 164px);
+  padding: 0;
   border: 1px solid #cbd5e1;
   border-radius: 10px;
   background:
@@ -2864,21 +2869,23 @@ select:disabled {
 
 .export-wizard-preview-img {
   position: absolute;
-  inset: 8px;
-  width: calc(100% - 16px);
-  height: calc(100% - 16px);
+  inset: var(--export-preview-inset);
+  width: calc(100% - (var(--export-preview-inset) * 2));
+  height: calc(100% - (var(--export-preview-inset) * 2));
+  border-radius: calc(10px - 1px - var(--export-preview-inset));
   object-fit: contain;
+  object-position: center;
   display: block;
 }
 
 .export-wizard-preview-loading {
   position: absolute;
-  inset: 8px;
+  inset: var(--export-preview-inset);
   z-index: 5;
   display: grid;
   place-items: center;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: calc(10px - 1px - var(--export-preview-inset));
   background: rgba(248, 250, 252, 0.72);
   backdrop-filter: blur(2px);
   pointer-events: none;
@@ -2899,8 +2906,8 @@ select:disabled {
 
 .export-crop-toolbar-btn {
   position: absolute;
-  top: 14px;
-  left: 10px;
+  top: 8px;
+  left: 8px;
   z-index: 4;
   width: 34px;
   height: 34px;
@@ -2943,8 +2950,8 @@ select:disabled {
 
 .export-transparent-control {
   position: absolute;
-  top: 56px;
-  left: 10px;
+  top: 46px;
+  left: 8px;
   z-index: 40;
 }
 
@@ -3052,8 +3059,9 @@ select:disabled {
 
 .export-crop-stage {
   position: absolute;
-  inset: 8px;
+  inset: var(--export-preview-inset);
   z-index: 3;
+  border-radius: calc(10px - 1px - var(--export-preview-inset));
   overflow: hidden;
   touch-action: none;
   user-select: none;
