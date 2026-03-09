@@ -2667,6 +2667,39 @@ select:disabled {
   max-height: calc(100% - 2px);
 }
 
+.export-optimal-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.export-optimal-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(239, 68, 68, 0.24);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(254, 242, 242, 0.98) 0%, rgba(254, 226, 226, 0.92) 100%);
+}
+
+.export-optimal-pill-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #991b1b;
+}
+
+.export-optimal-pill-value {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: #dc2626;
+}
+
 .export-name-composer {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -3078,6 +3111,28 @@ select:disabled {
   grid-template-columns: minmax(0, 1fr);
   row-gap: 6px;
   align-items: stretch;
+}
+
+.export-compression-level-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.export-compression-level-row > label {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.export-compression-level-select {
+  min-height: 34px;
+  padding-right: 28px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #991b1b;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(254, 242, 242, 0.92) 100%);
+  border-color: #fecaca;
 }
 
 .export-format-compression-compact > label[for="exportCompressionRange"] {

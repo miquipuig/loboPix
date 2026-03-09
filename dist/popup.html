@@ -185,6 +185,20 @@
               <i class="bi bi-x-lg" aria-hidden="true"></i>
             </button>
           </div>
+          <div id="exportWizardOptimalSummary" class="export-optimal-summary" aria-live="polite">
+            <span class="export-optimal-pill">
+              <span class="export-optimal-pill-label">WebP</span>
+              <span id="exportWizardOptimalWebpValue" class="export-optimal-pill-value">--</span>
+            </span>
+            <span class="export-optimal-pill">
+              <span class="export-optimal-pill-label">PNG</span>
+              <span id="exportWizardOptimalPngValue" class="export-optimal-pill-value">--</span>
+            </span>
+            <span class="export-optimal-pill">
+              <span class="export-optimal-pill-label">JPG</span>
+              <span id="exportWizardOptimalJpegValue" class="export-optimal-pill-value">--</span>
+            </span>
+          </div>
           <div class="export-name-composer" role="group" aria-labelledby="exportFileGroupLabel">
             <span id="exportFileGroupLabel" class="export-name-badge">Archivo</span>
             <input id="exportWizardNameInput" class="save-as-modal-input export-name-input" type="text" maxlength="180" placeholder="nombre-archivo" aria-label="Nombre del archivo" />
@@ -269,6 +283,18 @@
             <option value="favicon">Favicon (ZIP multimida)</option>
           </select>
           <div class="export-format-compression-compact">
+            <div class="export-compression-level-row">
+              <label for="exportCompressionLevelSelect" class="save-as-modal-label">Nivel de compresión</label>
+              <select
+                id="exportCompressionLevelSelect"
+                class="save-as-modal-input export-compression-level-select"
+                aria-label="Nivel de compresión recomendado"
+              >
+                <option value="conservative">Conservador</option>
+                <option value="optimal">Óptimo</option>
+                <option value="aggressive">Agresivo</option>
+              </select>
+            </div>
             <label for="exportCompressionRange" class="save-as-modal-label">Compresión</label>
             <div class="export-compression-row">
               <div class="export-compression-track">
